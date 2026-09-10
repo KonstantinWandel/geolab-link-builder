@@ -299,6 +299,22 @@ input, textarea, select { user-select: text; }
 .node-head { padding: .45rem .55rem .4rem; border-bottom: 1px solid var(--rule); cursor: grab; position: relative; }
 .node.base .node-head { background: var(--head-bg); color: var(--head-fg); border-bottom-color: var(--head-bg); }
 .node.base .node-head .sub, .node.base .node-head .eyebrow { color: var(--head-sub); }
+/* Der Wahlpunkt für die Analysetabelle, in der Kopfzeile jedes Blocks. */
+.eyebrow-row { display: flex; align-items: center; gap: .35rem; }
+.pickbase {
+  border: 0; background: none; padding: 0; margin: 0; cursor: pointer;
+  display: flex; align-items: center; flex: 0 0 auto;
+}
+.pickbase > span {
+  width: 12px; height: 12px; border-radius: 50%; display: block;
+  border: 2px solid var(--faint); background: transparent; transition: none;
+}
+.pickbase:hover > span { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.node.base .pickbase > span {
+  border-color: var(--head-fg);
+  background: radial-gradient(circle, var(--head-fg) 0 45%, transparent 46%);
+}
+.node.base .pickbase { cursor: default; }
 .node-head .ttl { font-weight: 900; font-size: .88rem; line-height: 1.2; letter-spacing: -.01em; padding-right: 1.2rem; }
 .node-head .sub { font-size: .72rem; color: var(--muted); margin-top: .1rem; }
 .node-x {

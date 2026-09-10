@@ -459,12 +459,25 @@ function nodeEl(n) {
   d.style.top = n.y + 'px';
   d.dataset.node = n.id;
 
+  /* Der Punkt vor der Zeile wählt die Analysetabelle. Er gehört an den Block selbst: dort
+     steht die Frage, welche Tabelle man analysiert, und nicht in einer Seitenleiste. */
+  const istBasis = n.kind === 'base';
   const head = el('div', 'node-head',
-    `<div class="eyebrow">${esc(n.kind === 'base' ? 'Analysis table' : n.kind === 'bridge' ? 'Bridge' : 'Regional data')}</div>` +
+    `<div class="eyebrow-row">` +
+      `<button class="pickbase" role="radio" aria-checked="${istBasis}"` +
+      ` title="${istBasis ? 'This is the table you are analysing' : 'Use this as the table you are analysing'}"` +
+      ` aria-label="Use ${esc(n.title)} as the analysis table"><span></span></button>` +
+      `<span class="eyebrow">${esc(istBasis ? 'Analysis table' : n.kind === 'bridge' ? 'Bridge' : 'Regional data')}</span>` +
+    `</div>` +
     `<div class="ttl">${esc(n.title)}</div>` +
     `<div class="sub">${esc(n.subtitle || '')}</div>` +
     `<button class="node-x" title="Remove this block" aria-label="Remove this block">×</button>`);
   head.querySelector('.node-x').addEventListener('click', (e) => { e.stopPropagation(); removeNode(n.id); });
+  head.querySelector('.pickbase').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (n.kind === 'base') { toast('This is already the table you are analysing.'); return; }
+    applyAction({ do: 'asBase', node: n.id });
+  });
   d.appendChild(head);
 
   d.appendChild(el('div', 'node-unit', esc(n.unit || '')));
@@ -538,7 +551,8 @@ function markSelection() {
    Schließknopf, die etwas anderes tun. */
 function makeNodeDraggable(d, n) {
   d.addEventListener('pointerdown', (ev) => {
-    if (ev.button !== 0 || ev.target.closest('.node-x') || ev.target.closest('.port')) return;
+    if (ev.button !== 0 || ev.target.closest('.node-x') || ev.target.closest('.pickbase') ||
+        ev.target.closest('.port')) return;
     ev.stopPropagation();
     /* Ohne das fängt der Browser eine Textmarkierung an, sobald man den Kasten zieht, und in
        manchen Browsern schluckt die anschließend die Zeigerereignisse. */
@@ -866,16 +880,29 @@ function runChecks() {
     return out;
   }
   if (!base) {
-    const kandidaten = S.nodes.filter((n) => n.kind !== 'base');
-    add('err', 'No analysis table',
-      'Nothing on the canvas is marked as the table you are analysing, so there is no side whose rows are kept and nothing to generate code for.',
-      'Add one of the blocks under <b>Your analysis table</b>, or promote a block that is already here: any table with rows of its own can be the one you analyse. ' +
-      (kandidaten.length === 1
-        ? `<b>${esc(kandidaten[0].title)}</b> is ${kandidaten[0].unit}, so it can be.`
-        : 'Select a block and use <b>Use this as my analysis table</b> in its panel.') +
-      ' Which one it should be is your decision: it depends on whether your rows are people, households, districts or something else.', '',
-      kandidaten.length === 1
-        ? { label: `Use “${kandidaten[0].title}” as the analysis table`, do: 'asBase', node: kandidaten[0].id }
+    /* Der wahrscheinlichste Kandidat ist der, der eigene Fälle mitbringt: eine Tabelle mit
+       Personen-, Haushalts- oder Fallnummer beschreibt Zeilen, die man analysiert, eine reine
+       Regionaltabelle beschreibt Gebiete. */
+    const kandidaten = S.nodes.filter((n) => n.kind !== 'base')
+      .map((n) => ({
+        n,
+        punkte: (n.keys.some((k) => KEYS[k.type].family === 'unit') ? 100 : 0) +
+                (n.kind === 'bridge' ? 10 : 0) + (n.editable ? 5 : 0)
+      }))
+      .sort((a, b) => b.punkte - a.punkte);
+    const bester = kandidaten.length ? kandidaten[0].n : null;
+    const verbunden = S.edges.length > 0;
+    add('err', verbunden ? 'Say which table you are analysing' : 'No analysis table',
+      verbunden
+        ? `The blocks on the canvas are linked to each other, and that part is fine. What is missing is which of them you are analysing: that is the side whose rows are kept, and without it there is nothing to generate code for.`
+        : 'Nothing on the canvas is marked as the table you are analysing, so there is no side whose rows are kept and nothing to generate code for.',
+      (bester
+        ? `Every block has a circle in its header that makes it the analysis table. Any table with rows of its own can be one. <b>${esc(bester.title)}</b> is ${esc(bester.unit)}, which is the likeliest of what is here. ` +
+          (kandidaten.length > 1 ? 'To pick a different one, click the circle in that block\'s header. ' : '')
+        : 'Add one of the blocks under <b>Your analysis table</b>. ') +
+      'Which one it should be is your decision: it depends on whether your rows are people, households, districts or something else.', '',
+      bester
+        ? { label: `Use “${bester.title}” as the analysis table`, do: 'asBase', node: bester.id }
         : { label: 'Show me the blocks', do: 'showPalette', group: 'Your analysis table' });
   }
 
@@ -890,8 +917,11 @@ function runChecks() {
 
   /* Blöcke, die nicht an der Analysetabelle hängen. Ein Block, der nur mit einem anderen
      losen Block verbunden ist, sieht verkabelt aus und steht trotzdem in keinem Skript. */
+  /* Ohne Analysetabelle ist jeder Block "nicht angebunden", auch die, die sauber miteinander
+     verbunden sind. Diese Warnungen sind dann nur Folgen des einen Fehlers oben, und sie lesen
+     sich, als sei die gezogene Verbindung nicht angekommen. */
   const inKette = chain().order;
-  chain().stranded.forEach((n) => {
+  (base ? chain().stranded : []).forEach((n) => {
     if (n.kind === 'base') return;
     add('warn', `“${n.title}” is not connected to your analysis table`,
       edgesOf(n.id).length
@@ -1796,7 +1826,7 @@ function inspector() {
     b.addEventListener('click', () => applyAction({ do: 'asBase', node: n.id }));
     d.appendChild(b);
     d.appendChild(el('p', 'hint',
-      'Any table with rows of its own can be the one you analyse. SOEPregion, for instance, is one row per household and survey year.'));
+      'The same as the circle in the block\'s own header. Any table with rows of its own can be the one you analyse: SOEPregion, for instance, is one row per household and survey year.'));
   } else if (S.nodes.length > 1) {
     d.appendChild(el('p', 'hint', 'This is the analysis table: its rows are the rows of the result.'));
   }
