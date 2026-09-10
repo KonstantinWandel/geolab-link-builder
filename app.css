@@ -113,7 +113,12 @@ code, kbd { font-family: var(--mono); font-size: .88em; }
 }
 
 /* ------------------------------------------------------------------ Gerüst */
-.app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+/* Das hier ist ein Werkzeug, kein Dokument: beim Ziehen soll nichts blau markiert werden.
+   Lesbare Textblöcke bekommen die Markierung ausdrücklich zurück, denn den erzeugten Code
+   will man kopieren können. */
+.app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; user-select: none; }
+pre.code, .check .body, .check .fix, .recipe, .insp .hint, .node-note,
+input, textarea, select { user-select: text; }
 
 .topbar {
   display: flex;
@@ -129,6 +134,28 @@ code, kbd { font-family: var(--mono); font-size: .88em; }
   content: ""; position: absolute; left: 0; bottom: -2px;
   width: 34px; height: 2px; background: var(--accent);
 }
+/* Zurück zur Seite, zu der das hier gehört. Die Marke ist dieselbe wie in der Kopfzeile der
+   GeoLAB-Seite, in ihrer hellen oder dunklen Fassung je nach Thema. */
+.home {
+  display: flex; align-items: center; gap: .45rem; text-decoration: none;
+  color: var(--ink); padding-right: .8rem; margin-right: .2rem;
+  border-right: 1px solid var(--rule);
+}
+.home:hover { color: var(--accent); }
+/* Zwei Bilddateien statt eines mit ausgetauschtem content: die CSS-Eigenschaft `content` auf
+   einem <img> zeigte in der dunklen Fassung das Symbol für ein kaputtes Bild samt Alternativtext.
+   Zwei Dateien und ein Umschalten der Sichtbarkeit können daran nicht scheitern. */
+.home-mark { height: 22px; width: auto; display: block; }
+.home-mark.dark { display: none; }
+.home-name { font-weight: 900; letter-spacing: -.02em; font-size: 1.02rem; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .home-mark.light { display: none; }
+  :root:not([data-theme="light"]) .home-mark.dark { display: block; }
+}
+:root[data-theme="dark"] .home-mark.light { display: none; }
+:root[data-theme="dark"] .home-mark.dark { display: block; }
+@media (max-width: 1180px) { .home-name { display: none; } }
+
 .brand { display: flex; align-items: baseline; gap: .55rem; margin-right: .4rem; }
 .brand b { font-weight: 900; letter-spacing: -.02em; font-size: 1.05rem; }
 .brand span { color: var(--faint); font-size: .82rem; }
@@ -287,7 +314,11 @@ code, kbd { font-family: var(--mono); font-size: .88em; }
 .port {
   display: flex; align-items: center; gap: .4rem;
   padding: .16rem .8rem; font-size: .78rem; position: relative;
+  /* Die ganze Zeile zieht eine Verbindung, nicht nur der Punkt an ihrem Ende. */
+  cursor: crosshair;
 }
+.port:hover { background: var(--paper-3); }
+.port.linked:hover { background: var(--accent-soft); }
 /* Anschlusspunkte sitzen auf den Kanten des Kastens, damit ein Draht sichtbar an der Zeile
    beginnt, zu der er gehört, und nicht irgendwo am Rand. */
 .port .dot {
@@ -297,6 +328,7 @@ code, kbd { font-family: var(--mono); font-size: .88em; }
 }
 .port .dot.l { left: -6px; }
 .port .dot.r { right: -6px; }
+.port:hover .dot { border-color: var(--accent); }
 .port .dot:hover { background: var(--accent); border-color: var(--accent); transform: scale(1.25); }
 .port.geo .dot:hover { transform: scale(1.25); }
 .port.time .dot:hover { transform: rotate(45deg) scale(1.25); }
@@ -319,8 +351,10 @@ code, kbd { font-family: var(--mono); font-size: .88em; }
   content: "best choice"; margin-left: .35rem; font-family: var(--font); font-size: .6rem;
   letter-spacing: .04em; color: var(--ok); font-weight: 400;
 }
+/* Beim Ziehen: wo man fallen lassen kann, leuchtet die ganze Zeile, nicht nur ihr Punkt. */
+.port.cand { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent); }
 .port.cand .dot { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
-.port.dim { opacity: .3; }
+.port.dim { opacity: .28; }
 .node.moving { cursor: grabbing; box-shadow: 0 8px 28px rgba(28, 36, 44, .22); }
 .node { cursor: grab; }
 .node .node-head { cursor: grab; }
