@@ -199,6 +199,18 @@ analysing. Keep that rule in mind when adding checks: report the cause, never it
 - **Visiting order decides what reaches the script.** A bridge inserted between two blocks must be
   walked *before* the block it feeds, otherwise its key never reaches it and the linkage silently
   degrades to a year-only join. Bridges are therefore visited first.
+- **The pan/zoom transform has to live in exactly one place.** Panning still set a CSS transform
+  on the `<svg>` while the `<g>` inside it already carried the same transform as an SVG attribute,
+  so every wire got it twice and floated off the canvas after the first pan. `verschiebeAnsicht()`
+  is now the only writer, and it clears the root's style every time. Test pan, zoom, node drag and
+  fit together, not one at a time: the doubling only showed after a pan followed by a zoom.
+- **Where a new block attaches is a guess, so weight it by chain depth.** After inserting a bridge,
+  the next block added went back to the block before the bridge, because a direct key match scored
+  higher than a derived one. Adding something after a bridge means after it, so `autoWire` adds
+  three points per position along the chain and prefers a crosswalk's current-vintage output.
+- **A table with one row per area AND year, matched on the area alone**, gives every row as many
+  hits as the table has years. It is now its own blocking check with a one-click fix, because the
+  guards in the script catch it only at run time, and only if you are lucky.
 - **A hit target of eleven pixels is not a hit target.** Making the whole box draggable turned a
   near-miss on a port dot into a box move, and the drop test also required the dot exactly, so a
   line could be started and not finished. That is what "the links don't link" looked like. The
