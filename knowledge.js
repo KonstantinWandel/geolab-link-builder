@@ -104,11 +104,13 @@ const REFORMS = [
 /* ------------------------------------------------------ quellenspezifische Hinweise */
 const SOURCE_NOTES = {
   destatisMissing: {
+    code: 'na = c\\(',
     title: 'Destatis files use letters where a number is missing',
     body: 'Exports from GENESIS, the Regionaldatenbank and the Zensus write a legend character instead of a value: <code>-</code> nothing occurred, <code>.</code> unknown or confidential, <code>...</code> not yet available, <code>/</code> too uncertain to publish, <code>x</code> cell blocked. Read naively, every one of them turns the column into text or, worse, silently becomes zero.',
     fix: 'Read the value column as text first, then convert, mapping those characters to missing.'
   },
   decimalComma: {
+    code: 'read_csv2',
     title: 'German number and date format',
     body: 'German exports use a comma as the decimal separator, a dot as the thousands separator, and semicolons between fields. Some are still Latin-1 rather than UTF-8, which turns every umlaut into a replacement character.',
     fix: 'Use a reader for semicolon-separated German files and state the encoding.'

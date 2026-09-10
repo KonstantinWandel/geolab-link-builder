@@ -28,14 +28,17 @@ touches your data and runs nothing.
 - **Checks in plain language**, updated as you build: level mismatches, year coverage, the five
   district reforms that break a time series, leading zeros, row multiplication, the Destatis
   legend characters, confidentiality of the SOEP regional data, and more.
-- **Fix-it buttons.** Where the remedy is unambiguous the check applies it: insert the crosswalk
-  a postcode-to-district link needs, switch to a boundary-recoded key, add the aggregation step,
-  keep only the largest share of a weighted crosswalk, cut the analysis period to the overlap.
-  The generated code changes with it.
+- **A button on every check.** Where the remedy is unambiguous the check applies it: insert the
+  crosswalk a postcode-to-district link needs, switch to a boundary-recoded key, add the
+  aggregation step, keep only the largest share of a weighted crosswalk, cut the analysis period
+  to the overlap. The generated code changes with it. Where the call is yours to make, the button
+  takes you to the place where you make it: the palette group, the block, the link, or the exact
+  line in the script.
 - **R and Stata output** with the guards in place: keys read as text, uniqueness asserted before
   the join, `relationship = "many-to-one"` / `merge m:1`, and a diagnostic for what did not match.
-- **Search over ~10,000 indicators**, using the live [GeoDB finder][geodb] index, so asking in
-  English finds German records.
+- **Search over ~10,000 indicators**, asking the live [GeoDB finder][geodb] API, so it ranks them
+  exactly as the finder does and asking in English finds German records. Every finder result links
+  into this page with the indicator chosen, and every block here links back into the finder.
 
 [geodb]: https://geodb.geolab.soz.uni-bielefeld.de/
 

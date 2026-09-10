@@ -141,7 +141,8 @@ async function loadCatalogue() {
    der Grund, warum "unemployment" hier etwas findet, obwohl im Katalog "Erwerbslosenquote"
    steht: die Beschriftungen sind deutsch, die Einbettung ist es nicht.
    Fällt der Dienst aus, bleibt die eingebaute Textsuche über den mitgelieferten Katalog. */
-const GEODB_API = 'https://geodb.geolab.soz.uni-bielefeld.de/api/soep/advice';
+const GEODB_SITE = 'https://geodb.geolab.soz.uni-bielefeld.de/';
+const GEODB_API = GEODB_SITE + 'api/soep/advice';
 let laufendeSuche = null;
 
 async function searchLive(q, top = 40) {
@@ -278,7 +279,7 @@ function zeigeTreffer(host, treffer, q, live, prods) {
   host.innerHTML = '';
   $('#palette-hint').innerHTML = treffer.length
     ? `<b>${treffer.length}</b> hit${treffer.length === 1 ? '' : 's'} ${live
-        ? 'from the GeoDB index, ranked the same way the finder ranks them'
+        ? `from the <a href="${GEODB_SITE}?q=${encodeURIComponent(q)}" target="_blank" rel="noopener">GeoDB finder</a>, ranked exactly as it ranks them`
         : 'from the built-in catalogue (the live index did not answer)'}. Click one to add it.`
     : 'Nothing found. Try one word, in German or English.';
   if (prods && prods.length) {
@@ -321,7 +322,8 @@ function renderPaletteRuhe(host) {
   host.appendChild(el('div', 'empty',
     `Search above to reach all <b>${S.cat.items.length.toLocaleString('en')}</b> indicators from
      <b>${S.cat.products.length}</b> data products. Catalogue built ${esc(S.cat.built)} from the
-     <a href="https://geodb.geolab.soz.uni-bielefeld.de/" target="_blank" rel="noopener">GeoDB index</a>.`));
+     <a href="${GEODB_SITE}" target="_blank" rel="noopener">GeoDB finder</a>, which is also where
+     you can read what any of them contains before you attach it.`));
 }
 
 function templateCard(t) {
@@ -835,13 +837,15 @@ function runChecks() {
   if (!S.nodes.length) {
     add('info', 'Start by putting your own data on the canvas',
       'The first block is the table you will analyse: the one whose rows you want to keep. Everything else is attached to it.',
-      'Use <b>Guide me</b>, or drag <b>SOEP person-year</b> or <b>Your own table</b> in from the left.');
+      'Use <b>Guide me</b>, or drag <b>SOEP person-year</b> or <b>Your own table</b> in from the left.', '',
+      { label: 'Show me the blocks', do: 'showPalette', group: 'Your analysis table' });
     return out;
   }
   if (!base) {
     add('err', 'No analysis table',
       'Nothing on the canvas is marked as the table you are analysing, so there is no side whose rows are kept and nothing to generate code for.',
-      'Add one of the blocks under <b>Your analysis table</b>.');
+      'Add one of the blocks under <b>Your analysis table</b>. Which one is your decision: it depends on whether your rows are people, households or something else.', '',
+      { label: 'Show me the blocks', do: 'showPalette', group: 'Your analysis table' });
   }
 
   /* Blöcke, die nicht an der Analysetabelle hängen. Ein Block, der nur mit einem anderen
@@ -854,7 +858,9 @@ function runChecks() {
         ? 'It is linked to another block, but there is no path from your analysis table to it, so nothing of it reaches the result and it does not appear in the code.'
         : 'A block with no line to another block contributes nothing and does not appear in the code.',
       'Drag from one of its keys to a matching key on a block that is already part of the chain, or remove it.', n.title,
-      besteVerbindung(n, inKette));
+      besteVerbindung(n, inKette) ||
+        (baseNode() ? { label: 'Show me this block', do: 'showNode', node: n.id }
+                    : { label: 'Show me the blocks', do: 'showPalette', group: 'Your analysis table' }));
   });
 
   /* Kanten. */
@@ -890,7 +896,8 @@ function runChecks() {
         const fein = grob === ta ? tb : ta;
         add('info', `${grob.label} can be read off ${fein.label}`,
           p.why + ' The script cuts the code to the right number of digits, which only works if the column is text with its leading zero intact.',
-          'Nothing to do, as long as the leading-zero check below is followed.', where);
+          'Nothing to do, as long as the leading-zero check below is followed.', where,
+          { label: 'Show me in the code', do: 'showCode', lang: 'r', pattern: '_derived = substr' });
       }
 
       /* Richtung: fein an grob heißt aggregieren, grob an fein heißt verteilen. */
@@ -917,7 +924,8 @@ function runChecks() {
     });
 
     if (!e.pairs.length) {
-      add('err', 'This link has no matching columns', 'An empty link produces nothing.', 'Remove it, or drag between two keys.', where);
+      add('err', 'This link has no matching columns', 'An empty link produces nothing.', 'Remove it, or drag between two keys.', where,
+        { label: 'Show me this link', do: 'showEdge', edge: e.id });
     }
   });
 
@@ -964,11 +972,12 @@ function runChecks() {
         add('ok', 'The years line up', `Your period ${from} to ${to} sits inside the ${reg.y0} to ${reg.y1} this table covers.`, '', where);
       }
       if (e.time === 'nearest' || e.time === 'lag1') {
-        add('info', e.time === 'lag1' ? 'The link uses the previous year on purpose' : 'The link uses the nearest available year',
+        add('info', st.time === 'lag1' ? 'The link uses the previous year on purpose' : 'The link uses the nearest available year',
           e.time === 'lag1'
             ? 'Most regional figures describe 31 December. An interview in spring is therefore closer to the situation the previous year-end describes than to the one at the end of the year it happened in.'
             : 'Where the exact year is missing, the closest one is used instead. That is defensible for slow-moving context and misleading for anything that moves fast.',
-          'Keep the distance to the matched year as a column so you can show how often it was used.', where);
+          'Keep the distance to the matched year as a column so you can show how often it was used. Whether it is defensible for your outcome is your call.', where,
+          { label: 'Show me the setting', do: 'showEdge', edge: (st.edges[0] || {}).id });
       }
     }
   });
@@ -1000,7 +1009,8 @@ function runChecks() {
   if (anyAgs) {
     add('info', 'Keep area codes as text, with the leading zero',
       'Schleswig-Holstein is 01, Berlin is 11. Read as a number, 01001 becomes 1001, and it will not match anything. Spreadsheet software does this silently on open, and so does every CSV reader that guesses column types.',
-      'Read the key column as text, and repair anything already damaged by padding it back to width: <code>sprintf("%05d", x)</code> in R, <code>string(x, "%05.0f")</code> in Stata. The generated script does both.');
+      'Read the key column as text, and repair anything already damaged by padding it back to width: <code>sprintf("%05d", x)</code> in R, <code>string(x, "%05.0f")</code> in Stata. The generated script does both.', '',
+      { label: 'Show me in the code', do: 'showCode', lang: 'r', pattern: 'sprintf\\("%0' });
   }
 
   /* Gebietsstand. */
@@ -1037,14 +1047,15 @@ function runChecks() {
         usesRek
           ? 'Make sure the regional table is on the same reference date. INKAR and the BBSR reference system are on the 2023 boundaries, which is what <code>kkz_rek</code> uses.'
           : 'Use a key that has been recoded to one reference date on both sides. In SOEP that is <code>kkz_rek</code> (boundaries of 31.12.2023) rather than <code>kkz</code>. Otherwise put a <b>District boundary crosswalk</b> block in between.',
-        '', rekTat);
+        '', rekTat || { label: 'Show me the crosswalk block', do: 'showPalette', card: 'District boundary crosswalk' });
     } else {
       add('ok', 'No district reform falls in your period', 'Between ' + S.years.from + ' and ' + S.years.to + ' the district boundaries did not change, so the codes are comparable across your years.', '');
     }
     if (usedTypes.has('ags8')) {
       add('info', 'Municipal boundaries change almost every year',
         'Unlike districts, municipalities merge and split constantly, in some states in every legislative period. There is no year in which nothing happened.',
-        'Work on one reference date and convert both sides to it, using the Destatis Gebietsstand tables or the BBSR reference system.');
+        'Work on one reference date and convert both sides to it, using the Destatis Gebietsstand tables or the BBSR reference system.', '',
+      { label: 'Show me the crosswalk block', do: 'showPalette', card: 'District boundary crosswalk' });
     }
   }
 
@@ -1053,7 +1064,8 @@ function runChecks() {
   attached.filter((n) => !n.weightCol && n.tplId !== 'regionl').forEach((lookup) => {
     add('info', `“${lookup.title}” must have one row per key`,
       'If the attached table still carries a dimension you have not filtered out (a sex breakdown, an age group, several indicators stacked on top of each other), then one key value appears several times. The join then multiplies your rows, silently, and every count and every regression afterwards is wrong.',
-      'The generated script refuses to run in that case: <code>relationship = "many-to-one"</code> in R, and <code>isid</code> plus <code>merge m:1</code> in Stata, all stop with an error rather than hand you a bigger table.', lookup.title);
+      'The generated script refuses to run in that case: <code>relationship = "many-to-one"</code> in R, and <code>isid</code> plus <code>merge m:1</code> in Stata, all stop with an error rather than hand you a bigger table.', lookup.title,
+      { label: 'Show me in the code', do: 'showCode', lang: 'r', pattern: 'anyDuplicated' });
   });
 
   /* SOEP-Vertraulichkeit. */
@@ -1071,7 +1083,8 @@ function runChecks() {
   if (soep && geoFine) {
     add('warn', 'District-level SOEP data is not in the download',
       'The standard SOEP distribution stops at the federal state. Districts, municipalities, postcodes and coordinates live in the separate regional data, which is applied for on its own and used inside the research data centre.',
-      'Plan this as an on-site or remote-execution analysis: the script below is what you take there. See <a href="/Accessing.html" target="_blank" rel="noopener">Accessing georeferenced data</a> for the route, and <a href="/Linking.html" target="_blank" rel="noopener">Linking</a> for the SoRa service if you need coordinates rather than area codes.');
+      'Plan this as an on-site or remote-execution analysis: the script below is what you take there. Which route you apply for is a decision, and it depends on whether you need area codes or coordinates.', '',
+      { label: 'Read how to get access', do: 'open', url: '/Accessing.html' });
     const soepGeoLinked = S.edges.some((e) => {
       const ends = [[nodeById(e.from.node), 'from'], [nodeById(e.to.node), 'to']];
       return ends.some(([n, side]) => n && n.id === soep.id &&
@@ -1102,7 +1115,8 @@ function runChecks() {
       '<b>Which boundaries:</b> they move, so a 2015 point in 2023 boundaries lands in a district that did not exist then. ' +
       '<b>Which coordinate system:</b> longitude and latitude in degrees against boundaries in metres silently puts every point off the map, and the join returns nothing rather than an error. ' +
       '<b>What counts as inside:</b> a point on a boundary, an address geocoded to the centre of its street, or a coordinate blurred for privacy each land somewhere slightly wrong.',
-      'Use the official boundaries for the reference date of your data (the BKG publishes VG250 free of charge), put both layers in the same projected CRS (ETRS89 / UTM 32N, EPSG 25832, for Germany) before joining, and count the points that matched no polygon. If that count is not near zero, the CRS is wrong.', n.title);
+      'Use the official boundaries for the reference date of your data (the BKG publishes VG250 free of charge), put both layers in the same projected CRS (ETRS89 / UTM 32N, EPSG 25832, for Germany) before joining, and count the points that matched no polygon. If that count is not near zero, the CRS is wrong.', n.title,
+      { label: 'Show me in the code', do: 'showCode', lang: 'r', pattern: 'st_transform' });
   });
 
   /* Gewichtete Zuordnungstabellen vervielfachen Zeilen mit Absicht. */
@@ -1125,7 +1139,9 @@ function runChecks() {
     const push = (k) => {
       if (seen.has(k)) return; seen.add(k);
       const s = SOURCE_NOTES[k];
-      add('info', s.title, s.body, s.fix, n.title);
+      add('info', s.title, s.body, s.fix, n.title,
+        s.code ? { label: 'Show me in the code', do: 'showCode', lang: 'r', pattern: s.code }
+               : { label: 'Show me this block', do: 'showNode', node: n.id });
     };
     if (['regionalstatistik', 'genesis_bund', 'zensus2022', 'regionalatlas'].includes(n.sourceKey)) {
       push('destatisMissing'); push('decimalComma');
@@ -1594,8 +1610,13 @@ function checksPanel() {
       `<div class="body">${c.body}</div>` +
       (c.fix ? `<div class="fix"><b>What to do.</b> ${c.fix}</div>` : '');
     if (c.action) {
-      const b = el('button', 'btn primary', esc(c.action.label));
+      /* Ein Knopf, der etwas ändert, sieht anders aus als einer, der nur hinführt: das eine
+         darf man blind drücken, das andere ist eine Entscheidung, die beim Leser bleibt. */
+      const zeigt = /^show|^open/.test(c.action.do || '');
+      const b = el('button', 'btn ' + (zeigt ? 'ghost' : 'primary'), esc(c.action.label));
       b.style.cssText = 'margin:.5rem 0 0 1.6rem';
+      b.title = zeigt ? 'Takes you to the place where you decide this'
+                      : 'Applies this to the canvas and to the generated code';
       b.addEventListener('click', (ev) => { ev.preventDefault(); applyAction(c.action); });
       d.appendChild(b);
     }
@@ -1625,19 +1646,27 @@ function codePanel(lang) {
   bar.appendChild(copy); bar.appendChild(dl);
   wrap.appendChild(bar);
   const pre = el('pre', 'code');
-  pre.innerHTML = highlight(code, lang);
+  pre.innerHTML = highlight(code, lang, S.codeMark);
   wrap.appendChild(pre);
   return wrap;
 }
 
-function highlight(code, lang) {
+function highlight(code, lang, mark) {
   const kw = lang === 'r'
-    ? /\b(library|mutate|left_join|inner_join|stopifnot|read_csv2|summarise|filter|count|nrow|substr|sprintf|as\.integer|as\.character|anyDuplicated|cat|locale|na)\b/g
-    : /\b(use|save|merge|import|delimited|rename|replace|gen|drop|tab|version|clear|capture|confirm|string)\b/g;
-  return esc(code)
-    .replace(/^([*#].*)$/gm, '<span class="c">$1</span>')
+    ? /\b(library|mutate|left_join|inner_join|stopifnot|read_csv2|summarise|filter|count|nrow|substr|sprintf|as\.integer|as\.character|anyDuplicated|cat|locale|na|group_by|slice_max|ungroup|weighted\.mean|across)\b/g
+    : /\b(use|save|merge|joinby|isid|collapse|import|delimited|rename|replace|gen|drop|tab|version|clear|capture|confirm|string|bysort|keep)\b/g;
+  const faerben = (zeile) => esc(zeile)
+    .replace(/^([*#].*)$/, '<span class="c">$1</span>')
     .replace(/(&quot;[^&]*?&quot;)/g, '<span class="s">$1</span>')
     .replace(kw, '<span class="k">$&</span>');
+  let re = null;
+  try { re = mark ? new RegExp(mark) : null; } catch (e) { re = null; }
+  let schon = false;
+  return code.split('\n').map((zeile) => {
+    const h = faerben(zeile);
+    if (re && !schon && re.test(zeile)) { schon = true; return `<span class="codemark">${h}</span>`; }
+    return h;
+  }).join('\n');
 }
 
 /* ------------------------------------------------------------------ Inspektor */
@@ -1761,6 +1790,13 @@ function inspector() {
       `<a href="${esc(n.pick.url)}" target="_blank" rel="noopener">Open this indicator at the source →</a>`));
   } else if (n.url) {
     d.appendChild(el('p', 'hint', `<a href="${esc(n.url)}" target="_blank" rel="noopener">Open the source →</a>`));
+  }
+  /* Der Weg zurück in den Finder: dort steht, was der Datensatz enthält, welche Jahre und
+     Ebenen er wirklich führt und was daneben noch in Frage käme. Der Finder liest ?q=. */
+  if (n.kind === 'regional') {
+    d.appendChild(el('p', 'hint',
+      `<a href="${esc(GEODB_SITE)}?q=${encodeURIComponent(n.pick ? n.pick.label : n.title)}"
+          target="_blank" rel="noopener">Look this up in the GeoDB finder →</a>`));
   }
   box.appendChild(d);
   return box;
@@ -2042,6 +2078,16 @@ function buildFromGuide() {
    erzeugte Code ändert sich mit. */
 function applyAction(a) {
   const n = a.node ? nodeById(a.node) : null;
+  /* Zeigende Aktionen ändern nichts, sie führen nur hin. Sie kehren früh zurück, weil ein
+     render() die Hervorhebung sofort wieder wegwischen würde. */
+  switch (a.do) {
+    case 'showPalette': zeigePalette(a.group, a.card); return;
+    case 'showNode': zeigeBlock(a.node, a.port); return;
+    case 'showEdge': zeigeKante(a.edge); return;
+    case 'showCode': zeigeImCode(a.lang || 'r', a.pattern); return;
+    case 'open': window.open(a.url, '_blank', 'noopener'); return;
+    default: break;
+  }
   switch (a.do) {
     case 'bridge':
       insertBridge(a);
@@ -2112,6 +2158,77 @@ function applyAction(a) {
       return;
   }
   render();
+}
+
+function blinken(node, dauer = 2400) {
+  if (!node) return;
+  node.classList.remove('flash');
+  void node.offsetWidth;
+  node.classList.add('flash');
+  setTimeout(() => node.classList.remove('flash'), dauer);
+}
+
+function zeigePalette(group, card) {
+  const feld = $('#q');
+  if (feld.value) { feld.value = ''; renderPalette(); }
+  setTimeout(() => {
+    const host = $('#palette');
+    let ziele = [];
+    if (card) {
+      ziele = $$('.card', host).filter((c) => (c.querySelector('.t') || {}).textContent === card);
+    } else if (group) {
+      const kopf = $$('.grouphead', host).find((x) => x.textContent.trim().toLowerCase() === group.toLowerCase());
+      if (kopf) {
+        kopf.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        let e = kopf.nextElementSibling;
+        while (e && !e.classList.contains('grouphead')) {
+          if (e.classList.contains('card')) ziele.push(e);
+          e = e.nextElementSibling;
+        }
+      }
+    }
+    if (ziele.length) ziele[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    ziele.forEach((z) => blinken(z));
+    if (!ziele.length) toast('That block is in the list on the left.');
+  }, 60);
+}
+
+function zeigeBlock(id, portName) {
+  const n = nodeById(id);
+  if (!n) return;
+  S.sel = { kind: 'node', id };
+  ensureVisible(n);
+  renderCanvas();
+  markSelection();
+  const d = $(`#world .node[data-node="${id}"]`);
+  blinken(d);
+  if (portName && d) {
+    const p = $$('.port', d).find((x) => (x.querySelector('.nm') || {}).textContent === portName);
+    blinken(p);
+  }
+}
+
+function zeigeKante(id) {
+  const e = S.edges.find((x) => x.id === id);
+  if (!e) return;
+  S.sel = { kind: 'edge', id };
+  const a = nodeById(e.from.node);
+  if (a) ensureVisible(a);
+  renderCanvas();
+  renderRight();
+  markSelection();
+  toast('The link is selected. Its settings are at the top right.');
+}
+
+function zeigeImCode(lang, pattern) {
+  S.tab = lang;
+  S.codeMark = pattern || null;
+  renderRight();
+  setTimeout(() => {
+    const m = $('#panels .codemark');
+    if (m) { m.scrollIntoView({ block: 'center', behavior: 'smooth' }); blinken(m, 3000); }
+    else toast('That line only appears once the linkage is complete.');
+  }, 40);
 }
 
 /* Setzt die passende Zuordnungstabelle zwischen zwei Blöcke, deren Schlüssel nicht direkt
@@ -2185,9 +2302,12 @@ function openHelp() {
 
         <h3>Where the catalogue comes from</h3>
         <p>The ${S.cat ? S.cat.items.length.toLocaleString('en') : ''} indicators come from the
-        <a href="https://geodb.geolab.soz.uni-bielefeld.de/" target="_blank" rel="noopener">GeoDB index</a>,
-        the same catalogue behind the GeoLAB metadata finder, plus all 660 INKAR indicators with their
-        per-level year coverage. The SOEP structure follows SOEP-Core v41.</p>
+        <a href="${GEODB_SITE}" target="_blank" rel="noopener">GeoDB finder</a>, and the search here
+        asks that finder directly, so it ranks them exactly as it does. Every result in the finder
+        also carries a link back into this page, with the indicator already chosen. The catalogue
+        bundled with the page is the fallback for when that service is unreachable; it also holds
+        all 660 INKAR indicators with their per-level year coverage. The SOEP structure follows
+        SOEP-Core v41.</p>
         <p>Background reading on the site: <a href="/why.html" target="_blank" rel="noopener">Why Geodata</a>,
         <a href="/Linking.html" target="_blank" rel="noopener">Linking</a> and
         <a href="/Accessing.html" target="_blank" rel="noopener">Accessing georeferenced data</a>.</p>
@@ -2334,7 +2454,7 @@ function wireUp() {
   });
 
   $$('.tab').forEach((t) => t.addEventListener('click', () => {
-    S.tab = t.id.replace('tab-', ''); renderRight();
+    S.tab = t.id.replace('tab-', ''); S.codeMark = null; renderRight();
   }));
 
   $('#btn-help').addEventListener('click', openHelp);

@@ -91,6 +91,33 @@ No dependencies, no build step. Three files and a JSON, served statically.
   problem and is on the same reference date as INKAR and the BBSR reference system. The guided flow
   inserts that bridge by itself, because nobody arriving here for the first time can know it exists.
 
+## Every check ends in a button
+
+A check that only names the defect asks the reader for exactly the knowledge they came here
+without. So each one carries an action, and there are two kinds, deliberately styled apart:
+
+- **A fix** (solid button) changes the canvas and the generated code: insert the crosswalk a
+  postcode-to-district link needs, switch to the boundary-recoded key, add the aggregation step,
+  keep only the largest share of a weighted crosswalk, cut the period to the overlap, take the
+  nearest year, add SOEPregion and link it, draw the best missing key pair. Safe to press.
+- **A pointer** (outline button) makes no change, because the call is the reader's: it scrolls to
+  and flashes the palette group, the block, the link, or the exact line in the generated script.
+  "No analysis table" cannot be fixed for you, since only you know whether your rows are people
+  or households; it can show you where the three blocks are.
+
+Actions live in `applyAction()` as a small verb registry (`bridge`, `years`, `time`, `rek`,
+`aggregate`, `largest`, `level`, `addRegionl`, `pair`, and the pointers `showPalette`, `showNode`,
+`showEdge`, `showCode`, `open`). Pointers return before `render()`, otherwise the re-render wipes
+the highlight they just set. When adding a check, give it one of these; an `ok` check needs none.
+
+## Both directions to the finder
+
+Every result in the GeoDB finder carries "Plan a linkage with this indicator", which opens this
+page with that record already chosen (`?q=`, consumed and stripped on load). Every regional block
+here carries "Look this up in the GeoDB finder", which opens the finder on the same label (the
+finder reads `?q=` too). The search in between is the finder's own API, so the two never disagree
+about what exists.
+
 ## The catalogue is generated, so fix the generator
 
 `../../scripts/build_linkbuilder_catalogue.py` reads
