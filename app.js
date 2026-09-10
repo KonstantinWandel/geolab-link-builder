@@ -90,7 +90,7 @@ function nodeFromProduct(idx, x, y, pick) {
 function setLevel(n, level) {
   const alt = n.keys || [];
   n.level = level;
-  const t = LEVEL_TO_KEY[level] || 'other';
+  const t = (n.keyTypes && n.keyTypes[level]) || LEVEL_TO_KEY[level] || 'other';
   const p = n.prodIdx != null ? S.cat.products[n.prodIdx] : { key: n.sourceKey };
   n.keys = [{ id: nid('k'), type: t, name: keyColumnName(p, t), note: '' }];
   if (n.y0 || n.y1) n.keys.push({ id: nid('k'), type: 'year', name: 'year', note: '' });
@@ -177,7 +177,19 @@ async function searchLive(q, top = 40) {
    liefert, damit alles dahinter nur eine Form kennt. */
 function pickFromRecord(r) {
   const namen = (S.cat && S.cat.levelNames) || {};
-  const levels = [...new Set((r.spatial_levels || []).map((l) => namen[l]).filter(Boolean))];
+  const levels = [];
+  const keyTypes = {};
+  (r.spatial_levels || []).forEach((l) => {
+    if (namen[l]) {
+      if (!levels.includes(namen[l])) levels.push(namen[l]);
+      return;
+    }
+    const nuts = NUTS_ALIAS[l];
+    if (nuts && !levels.includes(nuts.level)) {
+      levels.push(nuts.level);
+      keyTypes[nuts.level] = nuts.key;
+    }
+  });
   const info = (S.cat && S.cat.sources && S.cat.sources[r.source_key]) || {};
   return {
     label: (r.label || '').trim(),
@@ -191,6 +203,7 @@ function pickFromRecord(r) {
     unit: r.unit || '',
     note: info.note || '',
     keyHint: info.keyHint || '',
+    keyTypes,
     live: true
   };
 }
@@ -237,6 +250,7 @@ function nodeFromPick(pick, x, y) {
     note: pick.note, keyHint: pick.keyHint, url: pick.url,
     sourceKey: pick.sourceKey, sourceLabel: pick.sourceLabel,
     levels, level: finestLevel(levels), y0: pick.y0, y1: pick.y1, keys: [], x, y,
+    keyTypes: pick.keyTypes || null,
     pick, restricted: String(pick.sourceKey || '').startsWith('fdz')
   };
   setLevel(n, n.level);
@@ -948,6 +962,8 @@ function runChecks() {
   });
 
   /* Kanten. */
+  const kettenTiefe = new Map();
+  chain().order.forEach((o, i) => kettenTiefe.set(o.id, i));
   S.edges.forEach((e) => {
     const A = nodeById(e.from.node), B = nodeById(e.to.node);
     if (!A || !B) return;
@@ -961,7 +977,13 @@ function runChecks() {
       const ka = keyOf(A, p.from), kb = keyOf(B, p.to);
       const ta = KEYS[ka.type], tb = KEYS[kb.type];
       const bruecke = bridgeFor(ka.type, kb.type);
-      const tat = bruecke ? { label: 'Insert the bridge', do: 'bridge', edge: e.id, from: p.from, to: p.to, tpl: bruecke } : null;
+      /* Für manche Paare gibt es keine Standardbrücke, etwa Kreis gegen NUTS-2: das sind zwei
+         verschiedene Ebenen UND zwei verschiedene Kodierungen. Dann bleibt nur, zu der Stelle
+         zu führen, an der man sich entscheidet. */
+      const zielBlock = A.kind === 'regional' ? A : (B.kind === 'regional' ? B : A);
+      const tat = bruecke
+        ? { label: 'Insert the bridge', do: 'bridge', edge: e.id, from: p.from, to: p.to, tpl: bruecke }
+        : { label: `Show me “${zielBlock.title}”`, do: 'showNode', node: zielBlock.id };
       if (p.mode === 'crosswalk') {
         add('warn', `${ta.label} and ${tb.label} need a lookup table`,
           p.why, 'Put a bridge block between the two, or add the correspondence table to your project folder and load it in the script.', where, tat);
@@ -984,13 +1006,18 @@ function runChecks() {
           { label: 'Show me in the code', do: 'showCode', lang: 'r', pattern: '_derived = substr' });
       }
 
-      /* Richtung: fein an grob heißt aggregieren, grob an fein heißt verteilen. */
+      /* Richtung: fein an grob heißt aggregieren, grob an fein heißt verteilen.
+         Welche Seite die Zeilen behält, entscheidet die Reihenfolge in der Kette und nicht die
+         Frage, ob ein Ende die Analysetabelle selbst ist: sobald eine Brücke dazwischenhängt,
+         ist sie das nie, und die Prüfung fiel damit stillschweigend aus. */
       const ra = ta.rank || 0, rb = tb.rank || 0;
-      const baseSide = (A.kind === 'base') ? 'A' : (B.kind === 'base' ? 'B' : null);
+      const tiefeA = kettenTiefe.has(A.id) ? kettenTiefe.get(A.id) : null;
+      const tiefeB = kettenTiefe.has(B.id) ? kettenTiefe.get(B.id) : null;
+      const baseSide = (tiefeA == null || tiefeB == null) ? null : (tiefeA < tiefeB ? 'A' : 'B');
       if (ra && rb && ra !== rb && baseSide) {
         const finerIsBase = (baseSide === 'A' ? ra > rb : rb > ra);
         if (!finerIsBase) {
-          const fein = (A.kind === 'base') ? B : A;
+          const fein = (baseSide === 'A') ? B : A;
           add(fein.aggregate ? 'ok' : 'warn', 'The attached data is finer than your unit of analysis',
             'You are attaching values measured for small areas to rows that stand for a larger area. There is no single value to attach, there are many.' +
             (fein.aggregate ? ' The script now aggregates before it joins.' : ''),
@@ -2459,7 +2486,7 @@ function openHelp() {
 }
 
 /* ------------------------------------------------------------------ Beispiel */
-function loadExample() {
+function loadExample(pick) {
   S.nodes = []; S.edges = []; S.sel = null;
   S.years = { from: 2010, to: 2022 };
   const p = nodeFromTemplate(TEMPLATES.find((t) => t.id === 'soep_person'), 40, 50);
@@ -2469,10 +2496,14 @@ function loadExample() {
                { node: r.id, key: r.keys.find((k) => k.type === 'hid').id });
   addEdgeQuiet({ node: p.id, key: p.keys.find((k) => k.type === 'year').id },
                { node: r.id, key: r.keys.find((k) => k.type === 'year').id });
-  const i = S.cat.products.findIndex((x) => x.key === 'inkar' && /Arbeitslosigkeit/.test(x.name));
-  const itemI = S.cat.items.findIndex((it) => it[1] === i && /Arbeitslosenquote/i.test(it[0]));
-  const pick = itemI >= 0 ? itemAsPick(itemI) : null;
-  const reg = nodeFromProduct(i, 670, 60, pick);
+  let gewaehlt = pick;
+  if (!gewaehlt) {
+    const i = S.cat.products.findIndex((x) => x.key === 'inkar' && /Arbeitslosigkeit/.test(x.name));
+    const itemI = S.cat.items.findIndex((it) => it[1] === i && /Arbeitslosenquote/i.test(it[0]));
+    gewaehlt = itemI >= 0 ? itemAsPick(itemI) : { label: 'INKAR: Arbeitslosigkeit', levels: ['district'],
+      y0: 1995, y1: 2023, sourceKey: 'inkar', sourceLabel: 'INKAR (BBSR)', url: 'https://www.inkar.de/' };
+  }
+  const reg = nodeFromPick(gewaehlt, 670, 60);
   if (reg.levels.includes('district')) setLevel(reg, 'district');
   S.nodes.push(reg);
   const rek = r.keys.find((k) => /rek/.test(k.name));
@@ -2731,27 +2762,43 @@ function zoom(f, cx, cy) {
 }
 
 /* ------------------------------------------------------------------ Start */
-/* Aus dem GeoDB-Finder kommt man mit ?q=<Indikator> hierher. Dann steht das Ziel schon fest
-   und es fehlen nur noch die Fragen nach den eigenen Daten. Die Adresse wird danach bereinigt,
-   damit ein Neuladen nicht wieder die Führung öffnet. */
-async function vonAussenUebernehmen() {
-  const q = new URLSearchParams(location.search).get('q');
+/* Aus dem GeoDB-Finder kommt man mit ?q=<Indikator>&src=<Quelle> hierher. Der Datensatz wird
+   dann direkt auf die Fläche gelegt und verdrahtet, nicht in die Führung gesteckt: wer im
+   Finder auf einen Treffer geklickt hat, hat seine Wahl schon getroffen und will ihn sehen.
+   Die Adresse wird danach bereinigt, damit ein Neuladen nichts ein zweites Mal einfügt. */
+async function vonAussenUebernehmen(sitzungWar) {
+  const par = new URLSearchParams(location.search);
+  const q = par.get('q');
+  const quelle = par.get('src');
   if (!q) return false;
   history.replaceState(null, '', location.pathname);
+
   let treffer = [];
-  try { treffer = await searchLive(q, 10); } catch (e) { /* Dienst nicht erreichbar */ }
+  try { treffer = await searchLive(q, 15); } catch (e) { /* Dienst nicht erreichbar */ }
   if (!treffer.length) {
     const r = search(q);
-    treffer = r ? r.items.slice(0, 1).map(itemAsPick) : [];
+    treffer = r ? r.items.slice(0, 5).map(itemAsPick) : [];
   }
   if (!treffer.length) { toast(`Nothing found for “${q}”.`); return false; }
-  const genau = treffer.find((t) => t.label.toLowerCase() === q.trim().toLowerCase()) || treffer[0];
-  openGuide();
-  GUIDE.pick = genau;
-  GUIDE.prodIdx = genau.prodIdx != null ? genau.prodIdx : -1;
-  drawGuide();
-  const sub = $('#gsub');
-  if (sub) sub.textContent = `You came from the GeoDB finder with “${genau.label}”. It is already chosen as what to attach, so answer these and the canvas is built.`;
+
+  /* Dieselbe Bezeichnung gibt es in mehreren Quellen ("Arbeitslosenquote" steht in INKAR, im
+     Regionalatlas und in der Regionalstatistik). Die Quelle aus dem Finder entscheidet. */
+  const gleich = (t) => t.label.trim().toLowerCase() === q.trim().toLowerCase();
+  const genau = treffer.find((t) => gleich(t) && t.sourceKey === quelle)
+             || treffer.find((t) => t.sourceKey === quelle)
+             || treffer.find(gleich)
+             || treffer[0];
+
+  if (sitzungWar) {
+    /* Es gibt schon eine Fläche: der Datensatz kommt dazu und hängt sich an, was passt. */
+    addPick(genau);
+  } else {
+    /* Erster Besuch: das Beispiel, aber mit seinem Indikator statt des voreingestellten. */
+    loadExample(genau);
+  }
+  S.tab = 'checks';
+  renderRight();
+  toast(`“${genau.label}” added. The checks on the right say what to watch out for.`);
   return true;
 }
 
@@ -2764,6 +2811,7 @@ async function vonAussenUebernehmen() {
   }
   wireUp();
   renderPalette();
-  if (!restore()) loadExample(); else render();
-  vonAussenUebernehmen();
+  const sitzungWar = restore();
+  if (!sitzungWar) loadExample(); else render();
+  vonAussenUebernehmen(sitzungWar);
 })();
