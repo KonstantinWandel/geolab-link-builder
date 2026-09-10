@@ -98,7 +98,8 @@ const REFORMS = [
   { year: 2008, where: 'Saxony', what: 'District reform: 22 rural districts became 10, and 7 district-free cities became 3.' },
   { year: 2009, where: 'North Rhine-Westphalia', what: 'Aachen city and district merged into the Städteregion Aachen (05334).' },
   { year: 2011, where: 'Mecklenburg-Western Pomerania', what: 'District reform: 12 rural districts and 6 district-free cities became 6 and 2.' },
-  { year: 2016, where: 'Lower Saxony', what: 'Göttingen and Osterode am Harz merged into the new district of Göttingen (03159).' }
+  { year: 2016, where: 'Lower Saxony', what: 'Göttingen and Osterode am Harz merged into the new district of Göttingen (03159).' },
+  { year: 2021, where: 'Thuringia', what: 'Eisenach lost its district-free status and was absorbed into the Wartburgkreis (16063).' }
 ];
 
 /* ------------------------------------------------------ quellenspezifische Hinweise */
