@@ -437,15 +437,20 @@ function screenToWorld(cx, cy) {
   return { x: (cx - r.left - S.view.x) / S.view.k, y: (cy - r.top - S.view.y) / S.view.k };
 }
 
-function renderCanvas() {
-  const world = $('#world');
-  const t = `translate(${S.view.x}px, ${S.view.y}px) scale(${S.view.k})`;
-  world.style.transform = t;
-  /* Das SVG selbst bleibt stehen und füllt die Fläche; verschoben wird die Gruppe darin.
-     Ein transformiertes SVG-Wurzelelement schneidet alles ab, was über seine voreingestellten
-     300 mal 150 Pixel hinausragt, und genau das hat die Drähte zu Stummeln gemacht. */
+/* Verschieben und Zoomen gehen durch EINE Stelle. Vorher setzte das Verschieben zusätzlich
+   eine CSS-Transformation auf das SVG selbst, während die Gruppe darin schon eine trug: die
+   Drähte bekamen sie doppelt und lagen nach jedem Verschieben irgendwo neben der Fläche. */
+function verschiebeAnsicht() {
+  $('#world').style.transform =
+    `translate(${S.view.x}px, ${S.view.y}px) scale(${S.view.k})`;
+  $('#wires').style.transform = '';
   wireLayer().setAttribute('transform',
     `translate(${S.view.x} ${S.view.y}) scale(${S.view.k})`);
+}
+
+function renderCanvas() {
+  const world = $('#world');
+  verschiebeAnsicht();
   $('#blank').hidden = S.nodes.length > 0;
   world.innerHTML = '';
   S.nodes.forEach((n) => world.appendChild(nodeEl(n)));
@@ -627,6 +632,7 @@ function drawWires() {
   const svg = wireLayer();
   svg.innerHTML = '';
   svg.setAttribute('transform', `translate(${S.view.x} ${S.view.y}) scale(${S.view.k})`);
+  $('#wires').style.transform = '';
   S.edges.forEach((e) => {
     const a = portCentre(e.from.node, e.from.key), b = portCentre(e.to.node, e.to.key);
     if (!a || !b) return;
@@ -789,6 +795,12 @@ function addEdge(from, to) {
 function autoWire(n) {
   const partners = S.nodes.filter((o) => o.id !== n.id);
   if (!partners.length) return;
+  /* Wer einen Block hinzufügt, nachdem er eine Brücke eingesetzt hat, meint "dahinter".
+     Die Tiefe in der Kette geht deshalb in die Bewertung ein: bei gleich gutem Schlüssel
+     gewinnt der Block, der weiter hinten hängt, und eine frisch eingesetzte Zuordnungstabelle
+     wird nicht übersprungen. */
+  const tiefe = new Map();
+  chain().order.forEach((o, i) => tiefe.set(o.id, i));
   let best = null;
   partners.forEach((o) => {
     n.keys.forEach((k) => {
@@ -798,8 +810,10 @@ function autoWire(n) {
         const score = (m.mode === 'direct' ? 100 : m.mode === 'derive' ? 60 : 20) +
                       (KEYS[k.type].family === 'geo' ? 10 : 0) +
                       (o.kind === 'base' || n.kind === 'regional' ? 5 : 0) +
-                      /* Bei SOEP ist kkz_rek die richtige Wahl: einheitlicher Gebietsstand. */
-                      (/rek/.test(k.name) || /rek/.test(ok.name) ? 8 : 0);
+                      /* Bei SOEP ist kkz_rek die richtige Wahl: einheitlicher Gebietsstand.
+                         Dasselbe gilt für die Ausgangsspalte einer Zuordnungstabelle. */
+                      (/rek|_20\d\d$/.test(k.name) || /rek|_20\d\d$/.test(ok.name) ? 8 : 0) +
+                      3 * (tiefe.has(o.id) ? tiefe.get(o.id) : 0);
         if (!best || score > best.score) best = { score, a: { node: n.id, key: k.id }, b: { node: o.id, key: ok.id } };
       });
     });
@@ -1015,6 +1029,25 @@ function runChecks() {
         'Matching on the year only pairs every row of one side with every row of the other side for that year. The result is enormous and it is always wrong.',
         'Drag a second link between the area codes, or between the case identifiers.', where, vorschlag);
     }
+    /* Eine Tabelle mit einer Zeile je Gebiet UND Jahr, nur über das Gebiet angespielt, gibt
+       jeder Zeile so viele Treffer, wie sie Jahre hat. Der Verbund bricht dann ab, wenn man
+       Glück hat, und vervielfacht die Stichprobe, wenn man keins hat. */
+    if (geoP.length && !timeP.length && reg.y0 && reg.y1 && reg.y0 !== reg.y1) {
+      const zeitKeys = reg.keys.filter((k) => KEYS[k.type].family === 'time');
+      let gegen = null;
+      chain().order.forEach((o) => {
+        if (o.id === reg.id || gegen) return;
+        const t = o.keys.find((k) => KEYS[k.type].family === 'time');
+        if (t && zeitKeys.length) gegen = { a: o, ak: t, bk: zeitKeys[0] };
+      });
+      add('err', `“${reg.title}” is matched on the area but not on the year`,
+        `It holds one row per area <b>and year</b>, ${reg.y0} to ${reg.y1}. Matching on the area alone pairs each of your rows with every year that area has, so the result is ${reg.y1 - reg.y0 + 1} times too long.`,
+        gegen ? `Link the years as well, so each row gets the value for its own year.`
+              : 'Add a year column to your analysis table and link it to this one.', where,
+        gegen ? { label: `Link ${gegen.ak.name} to ${gegen.bk.name}`, do: 'pair',
+                  aNode: gegen.a.id, aKey: gegen.ak.id, bNode: reg.id, bKey: gegen.bk.id } : null);
+    }
+
     const e = { time: st.time };
     if (reg.y0 && reg.y1 && timeP.length) {
       const from = S.years.from, to = S.years.to;
@@ -1109,6 +1142,8 @@ function runChecks() {
         });
       });
     }
+    /* Liegt schon eine Gebietsstands-Zuordnung auf der Fläche, wäre "füg eine hinzu" falsch. */
+    const schonDa = S.nodes.find((x) => x.tplId === 'xwalk_gebietsstand');
     if (hits.length) {
       add(usesRek ? 'info' : 'warn', `Your period crosses ${hits.length} district reform${hits.length === 1 ? '' : 's'}`,
         'District codes are not stable over time. When districts merge, old codes disappear and a new one appears, so the same place carries different codes in different years and a naive join loses exactly those places.' +
@@ -1116,8 +1151,13 @@ function runChecks() {
         (usesRek ? 'You are using a recoded key, which is the right answer to this.' : ''),
         usesRek
           ? 'Make sure the regional table is on the same reference date. INKAR and the BBSR reference system are on the 2023 boundaries, which is what <code>kkz_rek</code> uses.'
-          : 'Use a key that has been recoded to one reference date on both sides. In SOEP that is <code>kkz_rek</code> (boundaries of 31.12.2023) rather than <code>kkz</code>. Otherwise put a <b>District boundary crosswalk</b> block in between.',
-        '', rekTat || { label: 'Show me the crosswalk block', do: 'showPalette', card: 'District boundary crosswalk' });
+          : ('Use a key that has been recoded to one reference date on both sides. In SOEP that is <code>kkz_rek</code> (boundaries of 31.12.2023) rather than <code>kkz</code>. ' +
+             (schonDa
+               ? 'The <b>District boundary crosswalk</b> is already on your canvas: route the district codes through it, from the old code to <code>ags_old</code> and from <code>ags_2023</code> on to the other side.'
+               : 'Otherwise put a <b>District boundary crosswalk</b> block in between.')),
+        '', rekTat || (schonDa
+          ? { label: 'Show me the crosswalk you already added', do: 'showNode', node: schonDa.id }
+          : { label: 'Show me the crosswalk block', do: 'showPalette', card: 'District boundary crosswalk' }));
     } else {
       add('ok', 'No district reform falls in your period', 'Between ' + S.years.from + ' and ' + S.years.to + ' the district boundaries did not change, so the codes are comparable across your years.', '');
     }
@@ -2519,8 +2559,7 @@ function wireUp() {
     const move = (e) => {
       S.view.x = start.vx + (e.clientX - start.x);
       S.view.y = start.vy + (e.clientY - start.y);
-      const t = `translate(${S.view.x}px, ${S.view.y}px) scale(${S.view.k})`;
-      $('#world').style.transform = t; $('#wires').style.transform = t;
+      verschiebeAnsicht();
     };
     const up = () => {
       canvas.classList.remove('dragging');
