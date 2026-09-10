@@ -538,8 +538,11 @@ function markSelection() {
    Schließknopf, die etwas anderes tun. */
 function makeNodeDraggable(d, n) {
   d.addEventListener('pointerdown', (ev) => {
-    if (ev.button !== 0 || ev.target.closest('.node-x') || ev.target.closest('.dot')) return;
+    if (ev.button !== 0 || ev.target.closest('.node-x') || ev.target.closest('.port')) return;
     ev.stopPropagation();
+    /* Ohne das fängt der Browser eine Textmarkierung an, sobald man den Kasten zieht, und in
+       manchen Browsern schluckt die anschließend die Zeigerereignisse. */
+    ev.preventDefault();
     const start = screenToWorld(ev.clientX, ev.clientY);
     const from = { x: n.x, y: n.y };
     let gezogen = false;
@@ -662,10 +665,16 @@ function drawWires() {
 let linking = null;
 
 function startLink(ev) {
+  /* Nicht nur der Punkt, die ganze Zeile zieht eine Verbindung. Ein Punkt ist elf Pixel groß,
+     und seit sich der ganze Kasten verschieben lässt, verschob ein Griff daneben den Kasten,
+     statt zu verbinden. Die Zeile ist der Anfasser, der Punkt nur seine Spitze. */
   const dot = ev.target.closest('.dot');
-  if (!dot) return false;
+  const zeile = dot ? dot.closest('.port') : ev.target.closest('.port');
+  if (!zeile) return false;
+  const nodeEl = zeile.closest('.node');
+  if (!nodeEl) return false;
   ev.stopPropagation(); ev.preventDefault();
-  const from = { node: dot.dataset.node, key: dot.dataset.port };
+  const from = { node: nodeEl.dataset.node, key: zeile.dataset.port };
   const fromKey = keyOf(nodeById(from.node), from.key);
   linking = { from, fromKey };
   highlightCandidates(from.node, fromKey.type);
@@ -678,22 +687,34 @@ function startLink(ev) {
     const p = screenToWorld(e.clientX, e.clientY);
     if (a) ghost.setAttribute('d', wirePath(a, { x: p.x, y: p.y, left: p.x, right: p.x }));
   };
-  const up = (e) => {
+  const aufraeumen = () => {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', abbrechen);
     ghost.remove();
     $$('.port').forEach((p) => p.classList.remove('cand', 'dim'));
-    const t = document.elementFromPoint(e.clientX, e.clientY);
-    const target = t && t.closest('.dot');
     linking = null;
-    if (target && target.dataset.node !== from.node) {
-      addEdge(from, { node: target.dataset.node, key: target.dataset.port });
-    } else if (target) {
+  };
+  const abbrechen = () => { aufraeumen(); };
+  const up = (e) => {
+    const t = document.elementFromPoint(e.clientX, e.clientY);
+    /* Fallenlassen zählt auf der ganzen Zeile, nicht nur auf dem Punkt. Elf Pixel genau zu
+       treffen war die eigentliche Ursache dafür, dass eine gezogene Linie nichts verband:
+       sie ließ sich anfangen und nicht abschließen. */
+    const zeile = t && t.closest('.port');
+    const zielKasten = zeile && zeile.closest('.node');
+    aufraeumen();
+    if (zeile && zielKasten && zielKasten.dataset.node !== from.node) {
+      addEdge(from, { node: zielKasten.dataset.node, key: zeile.dataset.port });
+    } else if (zeile) {
       toast('A block cannot be linked to itself.');
+    } else if (t && t.closest('.node')) {
+      toast('Drop it on one of the key rows, not on the body of the block.');
     }
   };
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', abbrechen);
   return true;
 }
 
@@ -706,6 +727,9 @@ function highlightCandidates(fromNode, type) {
       if (n.id === fromNode) { p.classList.add('dim'); return; }
       const m = matchKeys(type, k.type);
       if (m.mode === 'no') p.classList.add('dim'); else p.classList.add('cand');
+      p.title = m.mode === 'no' ? (m.why || 'These two cannot be matched.')
+        : m.mode === 'direct' ? 'Same kind of column: drop here.'
+        : (m.why || 'These can be matched, with a step in between.');
     });
   });
 }
@@ -842,10 +866,26 @@ function runChecks() {
     return out;
   }
   if (!base) {
+    const kandidaten = S.nodes.filter((n) => n.kind !== 'base');
     add('err', 'No analysis table',
       'Nothing on the canvas is marked as the table you are analysing, so there is no side whose rows are kept and nothing to generate code for.',
-      'Add one of the blocks under <b>Your analysis table</b>. Which one is your decision: it depends on whether your rows are people, households or something else.', '',
-      { label: 'Show me the blocks', do: 'showPalette', group: 'Your analysis table' });
+      'Add one of the blocks under <b>Your analysis table</b>, or promote a block that is already here: any table with rows of its own can be the one you analyse. ' +
+      (kandidaten.length === 1
+        ? `<b>${esc(kandidaten[0].title)}</b> is ${kandidaten[0].unit}, so it can be.`
+        : 'Select a block and use <b>Use this as my analysis table</b> in its panel.') +
+      ' Which one it should be is your decision: it depends on whether your rows are people, households, districts or something else.', '',
+      kandidaten.length === 1
+        ? { label: `Use “${kandidaten[0].title}” as the analysis table`, do: 'asBase', node: kandidaten[0].id }
+        : { label: 'Show me the blocks', do: 'showPalette', group: 'Your analysis table' });
+  }
+
+  /* Analysetabelle da, aber noch nichts daran. Ohne diesen Satz steht die Spalte leer da,
+     was aussieht, als sei das Werkzeug kaputt. */
+  if (base && !S.edges.length) {
+    add('info', 'Nothing attached yet',
+      `Your analysis table is <b>${esc(base.title)}</b>, ${esc(base.unit)}. Now search for the regional data you want beside it, and drag between the two key rows that should meet.`,
+      'The search on the left is the GeoDB finder\'s own, so ask in plain words: <i>unemployment rate</i>, <i>Kinderbetreuung</i>, <i>rents</i>.', '',
+      { label: 'Show me the catalogue', do: 'showPalette', group: 'Regional data, most used' });
   }
 
   /* Blöcke, die nicht an der Analysetabelle hängen. Ein Block, der nur mit einem anderen
@@ -1749,6 +1789,18 @@ function inspector() {
     d.appendChild(el('p', 'hint', 'This is what the year checks compare the sources against.'));
   }
 
+  if (n.kind !== 'base') {
+    const b = el('button', 'btn', 'Use this as my analysis table');
+    b.style.marginTop = '.6rem';
+    b.title = 'Its rows become the rows of the result, and everything else is attached to them.';
+    b.addEventListener('click', () => applyAction({ do: 'asBase', node: n.id }));
+    d.appendChild(b);
+    d.appendChild(el('p', 'hint',
+      'Any table with rows of its own can be the one you analyse. SOEPregion, for instance, is one row per household and survey year.'));
+  } else if (S.nodes.length > 1) {
+    d.appendChild(el('p', 'hint', 'This is the analysis table: its rows are the rows of the result.'));
+  }
+
   if (n.kind === 'regional' && n.levels && n.levels.length > 1) {
     d.appendChild(el('label', '', 'Which regional depth did you download?'));
     const sel = el('select');
@@ -2147,6 +2199,18 @@ function applyAction(a) {
       ensureVisible(br);
       S.sel = { kind: 'node', id: br.id };
       toast('SOEPregion added and linked on hid and syear.');
+      break;
+    }
+    case 'asBase': {
+      if (!n) return;
+      /* Es gibt genau eine Analysetabelle. Die bisherige fällt auf ihre Herkunft zurück. */
+      S.nodes.forEach((x) => {
+        if (x.kind === 'base' && x.id !== n.id) x.kind = x.origKind || (x.tplId ? 'bridge' : 'regional');
+      });
+      if (n.origKind == null) n.origKind = n.kind;
+      n.kind = 'base';
+      S.sel = { kind: 'node', id: n.id };
+      toast(`“${n.title}” is now the analysis table. Its rows are the rows of the result.`);
       break;
     }
     case 'pair': {

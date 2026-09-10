@@ -165,6 +165,15 @@ work out what the picture meant:
 - Both side panels are resizable by dragging the divider (or with the arrow keys when it has
   focus); the widths are remembered per browser.
 
+## Any block can be the analysis table
+
+There is exactly one analysis table and its rows are the rows of the result, but which block
+holds that role is not fixed by what the block is. `regionl` is one row per household and survey
+year, so it is a perfectly good thing to analyse; the same goes for a regional table if districts
+are your unit. Every non-base block therefore carries **Use this as my analysis table** in its
+panel, and the "No analysis table" check offers it directly when exactly one candidate is on the
+canvas. Promotion demotes the previous base back to `origKind`.
+
 ## Things that were got wrong once and should not be got wrong again
 
 - **A transformed `<svg>` root clips at its default 300 × 150.** The wires were stubs until the
@@ -181,6 +190,17 @@ work out what the picture meant:
 - **Visiting order decides what reaches the script.** A bridge inserted between two blocks must be
   walked *before* the block it feeds, otherwise its key never reaches it and the linkage silently
   degrades to a year-only join. Bridges are therefore visited first.
+- **A hit target of eleven pixels is not a hit target.** Making the whole box draggable turned a
+  near-miss on a port dot into a box move, and the drop test also required the dot exactly, so a
+  line could be started and not finished. That is what "the links don't link" looked like. The
+  whole key row is now the handle at both ends, and the row highlights while you drag over it.
+- **`user-select` on the node was not enough.** Dragging still painted the rest of the page blue,
+  and in browsers that then start a native drag it swallows the pointer events. The app shell is
+  `user-select: none` with the readable blocks opted back in, and node pointerdown calls
+  `preventDefault()`.
+- **`content: url(...)` on an `<img>` is a fragile way to swap a themed image.** In the dark theme
+  it rendered the broken-image glyph plus the alt text. Two `<img>` elements and a display toggle
+  cannot fail that way.
 - **`--rule-strong` is light in the dark theme.** Using it as a header background gave white
   subtitle text on a light-blue bar. The analysis block's header has its own tokens now.
 
