@@ -33,6 +33,18 @@ const LEVEL_TO_KEY = {
   postcode: 'plz', constituency: 'wk', grid: 'grid', point: 'coord',
   subdistrict: 'other', other: 'other'
 };
+/* Der Index führt bei einem Teil der Datensätze die NUTS-Bezeichnung statt des deutschen
+   Gebietsnamens (INKAR etwa hat Indikatoren, deren einzige Ebene "NUTS2" heißt). Sie werden auf
+   dieselbe Gebietsebene abgebildet, behalten aber ihre eigene Schlüsselart: in so einer Datei
+   steht ein NUTS-Code und kein amtlicher Gemeindeschlüssel, und der Unterschied ist genau der,
+   vor dem dieses Werkzeug warnen soll. */
+const NUTS_ALIAS = {
+  NUTS1: { level: 'state', key: 'nuts1' },
+  NUTS2: { level: 'govdistrict', key: 'nuts2' },
+  NUTS3: { level: 'district', key: 'nuts3' },
+  LAU: { level: 'municipality', key: 'ags8' }
+};
+
 const LEVEL_LABEL = {
   state: 'Federal states', govdistrict: 'Government regions', district: 'Districts',
   municipality: 'Municipalities', postcode: 'Postcodes', constituency: 'Constituencies',

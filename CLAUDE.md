@@ -113,10 +113,21 @@ the highlight they just set. When adding a check, give it one of these; an `ok` 
 ## Both directions to the finder
 
 Every result in the GeoDB finder carries "Plan a linkage with this indicator", which opens this
-page with that record already chosen (`?q=`, consumed and stripped on load). Every regional block
-here carries "Look this up in the GeoDB finder", which opens the finder on the same label (the
-finder reads `?q=` too). The search in between is the finder's own API, so the two never disagree
-about what exists.
+page with the record **already on the canvas and wired**, not in the guided flow: someone who
+clicked a result has made their choice and wants to see it. The link carries `?q=<label>&src=<source_key>`,
+both consumed and stripped on load. The source key matters: "Arbeitslosenquote" exists in INKAR, in
+the Regionalatlas and three times over in the Regionalstatistik, and without it the wrong one lands
+on the canvas. On a first visit the record replaces the example's regional block, so the chain is
+complete; on a return visit it joins whatever was already there. Every regional block here carries
+"Look this up in the GeoDB finder", which opens the finder on the same label (the finder reads `?q=`
+too). The search in between is the finder's own API, so the two never disagree about what exists.
+
+**The index does not always use the German level names.** Some records, INKAR among them, give
+`NUTS2` where others give `Regierungsbezirke`, and a level map that only knew the German names
+silently dropped them from the live search: clicking the INKAR row landed a Regionalstatistik
+record instead. `NUTS_ALIAS` maps them onto the same area level while keeping a NUTS **key type**,
+because such a file really does hold a NUTS code and not an AGS, and telling the two apart is the
+job. Any new level name in the index needs an entry there or its records vanish without a word.
 
 ## The catalogue is generated, so fix the generator
 
