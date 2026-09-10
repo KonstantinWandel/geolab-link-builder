@@ -2496,7 +2496,7 @@ function loadExample(pick) {
                { node: r.id, key: r.keys.find((k) => k.type === 'hid').id });
   addEdgeQuiet({ node: p.id, key: p.keys.find((k) => k.type === 'year').id },
                { node: r.id, key: r.keys.find((k) => k.type === 'year').id });
-  let gewaehlt = pick;
+  let gewaehlt = (pick && typeof pick === 'object' && typeof pick.label === 'string') ? pick : null;
   if (!gewaehlt) {
     const i = S.cat.products.findIndex((x) => x.key === 'inkar' && /Arbeitslosigkeit/.test(x.name));
     const itemI = S.cat.items.findIndex((it) => it[1] === i && /Arbeitslosenquote/i.test(it[0]));
@@ -2612,7 +2612,9 @@ function wireUp() {
   $('#btn-zoom-out').addEventListener('click', () => zoom(1 / 1.15));
   $('#btn-fit').addEventListener('click', fitView);
   $('#btn-guide').addEventListener('click', openGuide);
-  $('#btn-example').addEventListener('click', loadExample);
+  /* Nicht `loadExample` direkt: der Zuhörer reicht das Klickereignis als ersten Parameter
+     weiter, und seit loadExample einen Treffer entgegennimmt, kam dort das Ereignis an. */
+  $('#btn-example').addEventListener('click', () => loadExample());
   $('#btn-reset').addEventListener('click', () => {
     S.nodes = []; S.edges = []; S.sel = null; S.tab = 'checks'; render();
   });
