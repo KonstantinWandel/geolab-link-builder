@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en" data-theme-managed>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Link Builder | GeoLAB</title>
+<!-- Unlisted work in progress: no index, no sitemap entry, no link from the site. -->
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="referrer" content="no-referrer">
+<meta name="description" content="Plan a linkage between survey microdata and German regional data, see what can go wrong, and get the R and Stata code for it.">
+<link rel="icon" href="/assets/brand/favicon.svg">
+<link rel="stylesheet" href="/assets/fonts/lato.css">
+<link rel="stylesheet" href="app.css">
+<script>
+  /* Darstellung vor dem ersten Zeichnen, dieselbe Regel wie auf der Projektseite:
+     die Systemeinstellung entscheidet, eine Wahl von Hand gilt 24 Stunden. */
+  (function () {
+    try {
+      var roh = localStorage.getItem('geolab-linkbuilder-thema');
+      if (roh) {
+        var o = JSON.parse(roh);
+        if ((o.wert === 'dark' || o.wert === 'light') && typeof o.zeit === 'number'
+            && o.zeit <= Date.now() && Date.now() - o.zeit < 864e5) {
+          document.documentElement.setAttribute('data-theme', o.wert);
+        }
+      }
+    } catch (e) { /* localStorage kann gesperrt sein */ }
+  })();
+</script>
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <b>Link Builder</b>
+      <span>Plan a linkage to German regional data, and get the code</span>
+    </div>
+    <button class="btn primary" id="btn-guide">Guide me</button>
+    <button class="btn" id="btn-example">Load an example</button>
+    <button class="btn ghost" id="btn-reset">Clear</button>
+    <div class="spacer"></div>
+    <button class="btn ghost" id="btn-help">What is this?</button>
+    <button class="btn ghost icon" id="btn-theme" title="Light or dark" aria-label="Switch between light and dark">◐</button>
+  </header>
+
+  <div class="cols">
+
+    <!-- ------------------------------------------------------------ Palette -->
+    <section class="pane left" aria-label="Data blocks">
+      <div class="pane-head">
+        <div class="search">
+          <input type="search" id="q" placeholder="Search 10,000 indicators…" autocomplete="off"
+                 aria-label="Search the regional data catalogue">
+        </div>
+        <p class="hint" id="palette-hint">Drag a block onto the canvas, or click <b>+</b>.</p>
+      </div>
+      <div class="pane-body" id="palette"></div>
+    </section>
+
+    <div class="grip" id="grip-left" role="separator" aria-orientation="vertical"
+         tabindex="0" aria-label="Resize the catalogue"></div>
+
+    <!-- ------------------------------------------------------------ Fläche -->
+    <section class="canvas-wrap" aria-label="Linkage canvas">
+      <div class="canvas" id="canvas">
+        <svg class="wires" id="wires" aria-hidden="true"></svg>
+        <div class="world" id="world"></div>
+      </div>
+      <div class="canvas-blank" id="blank" hidden>
+        <b>Nothing on the canvas yet</b>
+        Start with <em>Guide me</em>, load the example, or drag a block in from the left.
+      </div>
+      <div class="canvas-tools">
+        <button class="btn ghost icon" id="btn-zoom-out" aria-label="Zoom out">−</button>
+        <button class="btn ghost icon" id="btn-zoom-in" aria-label="Zoom in">+</button>
+        <button class="btn ghost icon" id="btn-fit" aria-label="Fit to view">⤢</button>
+      </div>
+      <div class="canvas-tip" id="tip">Drag a box to move it. Drag from a dot to a dot to link two tables.</div>
+      <div class="legend" aria-label="What the columns mean">
+        <span><i class="geo"></i><b>Area code</b> and <i class="time"></i><b>date</b> are what link different sources</span>
+        <span><i class="unit"></i>a case number links tables from the same study</span>
+      </div>
+    </section>
+
+    <div class="grip" id="grip-right" role="separator" aria-orientation="vertical"
+         tabindex="0" aria-label="Resize the checks and code panel"></div>
+
+    <!-- ------------------------------------------------------------ Rechte Spalte -->
+    <section class="pane right" aria-label="Checks and code">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" id="tab-checks" aria-selected="true" aria-controls="p-checks">Checks <span class="count" id="c-checks">0</span></button>
+        <button class="tab" role="tab" id="tab-plan"   aria-selected="false" aria-controls="p-plan">Plan</button>
+        <button class="tab" role="tab" id="tab-r"      aria-selected="false" aria-controls="p-r">R</button>
+        <button class="tab" role="tab" id="tab-stata"  aria-selected="false" aria-controls="p-stata">Stata</button>
+      </div>
+      <div class="pane-body" id="panels"></div>
+    </section>
+
+  </div>
+</div>
+
+<script src="knowledge.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
