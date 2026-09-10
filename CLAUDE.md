@@ -165,14 +165,23 @@ work out what the picture meant:
 - Both side panels are resizable by dragging the divider (or with the arrow keys when it has
   focus); the widths are remembered per browser.
 
-## Any block can be the analysis table
+## Any block can be the analysis table, and the control is on the block
 
-There is exactly one analysis table and its rows are the rows of the result, but which block
-holds that role is not fixed by what the block is. `regionl` is one row per household and survey
-year, so it is a perfectly good thing to analyse; the same goes for a regional table if districts
-are your unit. Every non-base block therefore carries **Use this as my analysis table** in its
-panel, and the "No analysis table" check offers it directly when exactly one candidate is on the
-canvas. Promotion demotes the previous base back to `origKind`.
+There is exactly one analysis table and its rows are the rows of the result, but which block holds
+that role is not fixed by what the block is. `regionl` is one row per household and survey year, so
+it is a perfectly good thing to analyse; the same goes for a regional table if districts are your
+unit. Every block header therefore carries a **radio dot**: filled on the analysis table, empty and
+clickable on the others. Promotion demotes the previous base back to `origKind`. The same action
+sits in the block's panel and on the "No analysis table" check, which names the likeliest candidate
+(the one carrying a case identifier, since a table with person or household numbers describes rows
+you analyse while a regional table describes areas).
+
+**A downstream warning is not a finding.** With no analysis table chosen, every block counted as
+"not connected to your analysis table", including two that were cleanly linked to each other. That
+reads as though the link the user just drew had not registered, and it was the single thing that
+made a correct canvas look broken. Those warnings are now suppressed while no base exists, and the
+one remaining error says what it actually is: the links are fine, say which table you are
+analysing. Keep that rule in mind when adding checks: report the cause, never its consequences.
 
 ## Things that were got wrong once and should not be got wrong again
 
