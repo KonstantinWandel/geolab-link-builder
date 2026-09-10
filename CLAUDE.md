@@ -42,6 +42,14 @@ It is **not** a separate service. `tools/link-builder` is listed under `resource
 anything dropped into `/opt/geolab/sites/geolab/` by hand disappears at the next publish. Being a
 resource is what makes it survive.
 
+## Two places, one source
+
+Work happens **here**, in the GeoLAB site tree, because that is what gets rendered and published.
+The public repository <https://github.com/KonstantinWandel/geolab-link-builder> is a mirror, the
+same arrangement `destatis-rag` and `soep-variable-finder` already use. Bring it up to date with
+`bash ~/kwandel/geolab-link-builder/sync_from_site.sh`, then commit and push there. An edit made
+only in the mirror is lost at the next sync.
+
 ## The files
 
 ```
