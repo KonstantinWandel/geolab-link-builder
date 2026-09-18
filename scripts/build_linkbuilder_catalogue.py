@@ -14,7 +14,7 @@ Ebenen, weil die beiden Fragen verschieden sind:
     "Arbeitslosenquote" sucht, landet über den Eintrag beim passenden Produkt.
 
 Erzeugtes Artefakt, nicht von Hand bearbeiten: die Korrekturen gehören in dieses Skript
-(Werkstattregel aus destatis-rag/CLAUDE.md, "fix the generator, never its output").
+(Werkstattregel: "fix the generator, never its output").
 """
 from __future__ import annotations
 

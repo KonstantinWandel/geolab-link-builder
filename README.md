@@ -69,9 +69,6 @@ Part of the [GeoLAB](https://geolab.soz.uni-bielefeld.de/) of the Leibniz Scienc
 SOEP-RegioHub at Bielefeld University and DIW Berlin. The SOEP structure follows SOEP-Core v41;
 the indicator catalogue comes from the GeoDB Geodata Index.
 
-`CLAUDE.md` holds the inside view: the domain model, the traps found while building it, and how
-to check a change.
-
 ## Licence
 
 MIT, see `LICENSE`. The catalogue describes data published by other institutions; each record
