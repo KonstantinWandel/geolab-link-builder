@@ -20,10 +20,37 @@ const el = (tag, cls, html) => {
 let seq = 1;
 const nid = (p) => `${p}${seq++}`;
 
-function toast(text) {
+function toast(text, zurueck) {
   const t = el('div', 'toast', esc(text));
+  if (zurueck) {
+    /* Jeder Abhilfeknopf traegt die Aufschrift "Applies this to the canvas". Sicher zu
+       druecken ist er erst, wenn man ihn zuruecknehmen kann: 'level' wirft Schluessel weg
+       und mit ihnen die Kanten, die daran hingen. */
+    const b = el('button', 'toast-undo', 'Undo');
+    b.addEventListener('click', () => { zurueck(); t.remove(); });
+    t.appendChild(b);
+  }
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 2200);
+  setTimeout(() => t.remove(), zurueck ? 7000 : 2200);
+}
+
+/* Der Stand vor der letzten Aenderung, damit genau ein Schritt zurueck geht. Mehr waere ein
+   Verlauf mit eigener Buchfuehrung; einer deckt den Fall ab, um den es geht: ich habe auf
+   einen Knopf gedrueckt und will es nicht. */
+let vorherigerStand = null;
+function standSichern() {
+  try {
+    vorherigerStand = JSON.stringify({ nodes: S.nodes, edges: S.edges, years: S.years, getan: S.getan });
+  } catch (e) { vorherigerStand = null; }
+}
+function standZurueck() {
+  if (!vorherigerStand) return;
+  try {
+    const o = JSON.parse(vorherigerStand);
+    S.nodes = o.nodes; S.edges = o.edges; S.years = o.years; S.getan = o.getan || {};
+    vorherigerStand = null;
+    render();
+  } catch (e) { /* dann eben nicht */ }
 }
 
 /* ------------------------------------------------------------------ Zustand */
@@ -35,6 +62,7 @@ const S = {
   view: { x: 40, y: 30, k: 1 },
   tab: 'checks',
   years: { from: 2010, to: 2022 },   // Jahre der Analysetabelle, vom Nutzer setzbar
+  getan: {},            // welche Abhilfe schon gedrueckt wurde, fuer die Rueckmeldung
   checks: []
 };
 
@@ -43,6 +71,19 @@ function nodeById(id) { return S.nodes.find((n) => n.id === id); }
 function keyOf(node, keyId) { return node && node.keys.find((k) => k.id === keyId); }
 function edgesOf(id) { return S.edges.filter((e) => e.from.node === id || e.to.node === id); }
 
+/* Eine Spalte zu entfernen, ohne ihre Verbindungen zu loesen, hinterlaesst Kanten, die auf
+   einen Schluessel zeigen, den es nicht mehr gibt. runChecks las dann `undefined.type` und die
+   ganze rechte Spalte blieb leer: Pruefungen, Bauplan und Code auf einmal. Dieselbe Disziplin
+   wie in setLevel, nur fuer die frei editierbaren Spalten. */
+function removeKey(node, keyId) {
+  node.keys = node.keys.filter((k) => k.id !== keyId);
+  S.edges.forEach((e) => {
+    e.pairs = e.pairs.filter((p) =>
+      !((e.from.node === node.id && p.from === keyId) || (e.to.node === node.id && p.to === keyId)));
+  });
+  S.edges = S.edges.filter((e) => e.pairs.length);
+}
+
 /* Ein Block entsteht entweder aus einer Vorlage oder aus einem Katalogprodukt. */
 function nodeFromTemplate(tpl, x, y) {
   return {
@@ -50,6 +91,8 @@ function nodeFromTemplate(tpl, x, y) {
     title: tpl.title, subtitle: tpl.subtitle, unit: tpl.unit,
     note: tpl.note, restricted: !!tpl.restricted, editable: !!tpl.editable,
     spatial: !!tpl.spatial, recipe: tpl.recipe || null,
+    measure: tpl.measure || null, params: tpl.params ? { ...tpl.params } : null,
+    surveyWeight: tpl.surveyWeight !== undefined ? tpl.surveyWeight : null,
     weightCol: tpl.weightCol || null, reader: tpl.reader,
     keys: tpl.keys.map((k) => ({ id: nid('k'), type: k.type, name: k.name, note: k.note || '', rec: !!k.rec })),
     x, y, pick: null, prodIdx: null
@@ -60,7 +103,7 @@ function nodeFromTemplate(tpl, x, y) {
    Produkt alle Ebenen, die irgendeine seiner Tabellen hat; ein Block, der sie alle zugleich
    als Schlüssel anbietet, behauptet etwas Falsches und erzeugt drei Spalten desselben Namens.
    Also: eine Ebene, standardmäßig die feinste, im Inspektor umschaltbar. */
-const LEVEL_ORDER = ['point', 'grid', 'municipality', 'subdistrict', 'postcode', 'constituency',
+const LEVEL_ORDER = ['point', 'grid100', 'grid', 'subdistrict', 'municipality', 'postcode', 'constituency',
                      'district', 'govdistrict', 'state'];
 function finestLevel(levels) {
   for (const l of LEVEL_ORDER) if (levels.includes(l)) return l;
@@ -118,7 +161,8 @@ function keyColumnName(p, type) {
 const LEVEL_ONE = {
   state: 'federal state', govdistrict: 'government region', district: 'district',
   municipality: 'municipality', postcode: 'postcode', constituency: 'constituency',
-  grid: '1 km grid cell', point: 'location', subdistrict: 'sub-district area', other: 'area'
+  grid: '1 km grid cell', grid100: '100 m grid cell', point: 'location',
+  subdistrict: 'quarter', other: 'area'
 };
 function unitPhrase(levels, y0, y1) {
   const lv = levels.map((l) => LEVEL_ONE[l] || l).join(' or ');
@@ -142,6 +186,10 @@ async function loadCatalogue() {
    steht: die Beschriftungen sind deutsch, die Einbettung ist es nicht.
    Fällt der Dienst aus, bleibt die eingebaute Textsuche über den mitgelieferten Katalog. */
 const GEODB_SITE = 'https://geodb.geolab.soz.uni-bielefeld.de/';
+/* Absolut und nicht relativ, weil dieses Werkzeug auch als eigenständiges Verzeichnis
+   veröffentlicht wird (die Spiegelung auf GitHub). Dort liegt kein Schwesterordner daneben,
+   und ein relativer Verweis führte ins Leere. Von der Seite selbst ist es dieselbe Herkunft. */
+const REGISTER_SITE = 'https://geolab.soz.uni-bielefeld.de/tools/measure-register/';
 const GEODB_API = GEODB_SITE + 'api/soep/advice';
 let laufendeSuche = null;
 
@@ -289,18 +337,94 @@ function renderPalette() {
   renderPaletteRuhe(host);
 }
 
+/* Die Zielebenen sind nicht Teil der Indikatorensuche, denn sie sind keine Indikatoren. Wer
+   "Spielplaetze" tippt, meint aber fast sicher sie und nicht die Dialyseplaetze, die als einzige
+   Katalogzeilen dieses Wortstueck tragen. Also stehen sie oben, mit dem Weg dorthin. */
+function zielTreffer(q) {
+  const w = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!w.length) return [];
+  return (S.cat.targets || []).filter((z) => {
+    const heu = (z.label + ' ' + z.tag + ' ' + (z.note || '')).toLowerCase();
+    return w.every((x) => heu.includes(x));
+  }).slice(0, 6);
+}
+
+function zielZeile(z, q) {
+  const row = el('div', 'result',
+    `<div class="t">${mark(z.label, q)}</div>` +
+    `<div class="s">OpenStreetMap &middot; <code>${esc(z.tag)}</code>` +
+    `${z.n ? ' &middot; ' + z.n.toLocaleString('de-DE') + ' objects' : ''} &middot; point layer</div>`);
+  row.title = 'Pick what you want to measure against this layer.';
+  row.addEventListener('click', () => zielMassWaehlen(z, row));
+  return row;
+}
+
+/* Eine Punktebene beantwortet mehrere Fragen, und "Entfernung zur naechsten" ist nur die
+   erste davon. Wer Apotheken waehlt, will oft wissen, wie viele im Umkreis liegen. Vorher
+   entstand immer das Abstandsmass und die anderen vier blieben unentdeckt. */
+function zielMassWaehlen(z, anker) {
+  const alt = $('#ziel-wahl');
+  if (alt) alt.remove();
+  const box = el('div', 'zielwahl');
+  box.id = 'ziel-wahl';
+  box.appendChild(el('div', 'grouphead', `What about ${esc(z.label)}?`));
+  const angebot = [
+    ['measure_dist_nearest', 'Distance to the nearest one', 'metres from each case'],
+    ['measure_count_radius', 'How many within a radius', 'a count per case'],
+    ['measure_knn', 'Mean distance to the k nearest', 'metres, less jumpy than the single nearest'],
+    ['measure_kde', 'Density at the case', 'a smooth surface instead of a count']
+  ];
+  angebot.forEach(([id, titel, unter]) => {
+    const tpl = TEMPLATES.find((t) => t.id === id);
+    if (!tpl) return;
+    const r = el('div', 'result', `<div class="t">${esc(titel)}</div><div class="s">${esc(unter)}</div>`);
+    r.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      addTemplate(tpl, 420, 90);
+      const n = S.nodes[S.nodes.length - 1];
+      n.params = Object.assign({}, n.params, { targetId: z.id });
+      S.sel = { kind: 'node', id: n.id };
+      box.remove();
+      render();
+    });
+    box.appendChild(r);
+  });
+  /* Normalerweise haengt die Auswahl direkt unter der angeklickten Zeile. Steht die Zeile
+     nicht in der Seite (die Pruefung baut sie einzeln), dann in die Palette, statt an einem
+     null.parentElement zu scheitern. */
+  if (anker && anker.parentElement) anker.parentElement.insertBefore(box, anker.nextSibling);
+  else ($('#palette') || document.body).appendChild(box);
+  return box;
+}
+
 function zeigeTreffer(host, treffer, q, live, prods) {
   host.innerHTML = '';
-  $('#palette-hint').innerHTML = treffer.length
-    ? `<b>${treffer.length}</b> hit${treffer.length === 1 ? '' : 's'} ${live
-        ? `from the <a href="${GEODB_SITE}?q=${encodeURIComponent(q)}" target="_blank" rel="noopener">GeoDB finder</a>, ranked exactly as it ranks them`
-        : 'from the built-in catalogue (the live index did not answer)'}. Click one to add it.`
+  /* Der Hinweis zaehlt beides getrennt. Eine Punktebene ist ein Treffer, auch wenn keine
+     Tabelle dazu passt, und "0 Treffer" darueber zu schreiben waere schlicht falsch. */
+  const nZiel = zielTreffer(q).length;
+  const teile = [];
+  if (nZiel) teile.push(`<b>${nZiel}</b> point layer${nZiel === 1 ? '' : 's'}`);
+  if (treffer.length) {
+    teile.push(`<b>${treffer.length}</b> indicator${treffer.length === 1 ? '' : 's'} ${live
+      ? `from the <a href="${GEODB_SITE}?q=${encodeURIComponent(q)}" target="_blank" rel="noopener">GeoDB finder</a>, ranked exactly as it ranks them`
+      : 'from the built-in catalogue (the live index did not answer)'}`);
+  } else if (nZiel && !live) {
+    teile.push('no indicator table carries that word');
+  }
+  $('#palette-hint').innerHTML = teile.length
+    ? teile.join(', and ') + '. Click one to add it.'
     : 'Nothing found. Try one word, in German or English.';
+  const ziele = zielTreffer(q);
+  if (ziele.length) {
+    host.appendChild(el('div', 'grouphead', 'Point layers, as the target of a measure'));
+    ziele.forEach((z) => host.appendChild(zielZeile(z, q)));
+  }
   if (prods && prods.length) {
     host.appendChild(el('div', 'grouphead', 'Whole data products'));
     prods.forEach((i) => host.appendChild(productCard(i, q)));
   }
   if (!treffer.length) {
+    if (ziele.length) return;   // die Ebene oben IST die Antwort, dann fehlt nichts
     host.appendChild(el('div', 'empty', 'Nothing with that word. Try a single, shorter one, or a German term.'));
     return;
   }
@@ -326,6 +450,21 @@ function renderPaletteRuhe(host) {
     host.appendChild(el('div', 'grouphead', esc(g)));
     groups[g].forEach((t) => host.appendChild(templateCard(t)));
   });
+
+  /* Die 26 Punktebenen standen nur in der Suche. Wer nicht das richtige Wort tippt, findet
+     sie nie, und sie sind das Einzige, wogegen die raeumlichen Masse ueberhaupt rechnen. */
+  const ziele = S.cat.targets || [];
+  if (ziele.length) {
+    host.appendChild(el('div', 'grouphead', 'Point layers, as the target of a measure'));
+    ZIELE_VORN.forEach((id) => {
+      const z = ziele.find((x) => x.id === id);
+      if (z) host.appendChild(zielZeile(z, ''));
+    });
+    const rest = el('div', 'empty',
+      `${ziele.length} layers in all, from OpenStreetMap: pharmacies, schools, stations, parks,
+       playgrounds and more. Search for one by name, in German or English.`);
+    host.appendChild(rest);
+  }
 
   host.appendChild(el('div', 'grouphead', 'Regional data, most used'));
   let shown = 0;
@@ -806,6 +945,17 @@ function addEdge(from, to) {
 
 /* Beim Einfügen eines Blocks sofort das offensichtliche Paar vorschlagen. Das ist der
    Unterschied zwischen "leere Fläche" und "es passiert etwas", wenn man zum ersten Mal hier ist. */
+/* Eine Umstell-Tabelle hat zwei Spalten mit derselben Art und verschiedenem Gebietsstand:
+   eine, auf der der alte Code ankommt, und eine, die weitergeht. Wer das verwechselt, haengt
+   den alten Code an die neue Spalte, und dann trifft die Zuordnung genau die Zeilen nicht,
+   um derentwillen man sie eingesetzt hat. */
+function umstellSpalten(n) {
+  if (!n || !n.keys) return null;
+  const alt = n.keys.find((k) => /_old$/.test(k.name));
+  const neu = n.keys.find((k) => /_20\d\d$/.test(k.name) || /rek/.test(k.name));
+  return alt && neu && alt.type === neu.type ? { alt, neu } : null;
+}
+
 function autoWire(n) {
   const partners = S.nodes.filter((o) => o.id !== n.id);
   if (!partners.length) return;
@@ -821,12 +971,21 @@ function autoWire(n) {
       o.keys.forEach((ok) => {
         const m = matchKeys(k.type, ok.type);
         if (m.mode === 'no') return;
+        /* Die Seite, auf der ein ankommender Schluessel an einer Umstell-Tabelle landen
+           muss, ist die ALTE. Die Regel darunter gibt einem Namen mit Jahreszahl Punkte,
+           weil das die Spalte ist, mit der man WEITERgeht; am Eingang dreht sie genau das
+           ins Falsche. Deshalb hier zuerst der Eingang, und nur wenn keiner vorliegt, die
+           allgemeine Vorliebe. */
+        const umN = umstellSpalten(n), umO = umstellSpalten(o);
+        let umstell = 0;
+        if (umN && !/rek|_20\d\d$/.test(ok.name)) umstell = k.id === umN.alt.id ? 14 : k.id === umN.neu.id ? -25 : 0;
+        else if (umO && !/rek|_20\d\d$/.test(k.name)) umstell = ok.id === umO.alt.id ? 14 : ok.id === umO.neu.id ? -25 : 0;
         const score = (m.mode === 'direct' ? 100 : m.mode === 'derive' ? 60 : 20) +
                       (KEYS[k.type].family === 'geo' ? 10 : 0) +
                       (o.kind === 'base' || n.kind === 'regional' ? 5 : 0) +
                       /* Bei SOEP ist kkz_rek die richtige Wahl: einheitlicher Gebietsstand.
                          Dasselbe gilt für die Ausgangsspalte einer Zuordnungstabelle. */
-                      (/rek|_20\d\d$/.test(k.name) || /rek|_20\d\d$/.test(ok.name) ? 8 : 0) +
+                      (umstell || (/rek|_20\d\d$/.test(k.name) || /rek|_20\d\d$/.test(ok.name) ? 8 : 0)) +
                       3 * (tiefe.has(o.id) ? tiefe.get(o.id) : 0);
         if (!best || score > best.score) best = { score, a: { node: n.id, key: k.id }, b: { node: o.id, key: ok.id } };
       });
@@ -969,9 +1128,15 @@ function runChecks() {
     if (!A || !B) return;
     const where = `${A.title} → ${B.title}`;
 
-    const geoPairs = e.pairs.filter((p) => KEYS[keyOf(A, p.from).type].family === 'geo');
-    const timePairs = e.pairs.filter((p) => KEYS[keyOf(A, p.from).type].family === 'time');
-    const unitPairs = e.pairs.filter((p) => KEYS[keyOf(A, p.from).type].family === 'unit');
+    /* Ein Paar, dessen Schluessel es nicht mehr gibt, darf hoechstens verschwinden und nicht
+       die ganze Pruefung mitnehmen. */
+    const famOf = (p) => {
+      const ka = keyOf(A, p.from), kb = keyOf(B, p.to);
+      return ka && kb && KEYS[ka.type] ? KEYS[ka.type].family : null;
+    };
+    const geoPairs = e.pairs.filter((p) => famOf(p) === 'geo');
+    const timePairs = e.pairs.filter((p) => famOf(p) === 'time');
+    const unitPairs = e.pairs.filter((p) => famOf(p) === 'unit');
 
     geoPairs.forEach((p) => {
       const ka = keyOf(A, p.from), kb = keyOf(B, p.to);
@@ -994,8 +1159,20 @@ function runChecks() {
           'Use a crosswalk with a share column and decide what the share means: population, addresses or area. Then either keep the largest share per unit, or take a weighted average afterwards.', where, tat);
       }
       if (p.mode === 'spatial') {
-        add('warn', `${ta.label} and ${tb.label} meet on the map, not in a table`,
-          p.why, 'Do the spatial step once, in a GIS or with <code>sf</code>, and save the result as a table with an area code. Everything after that is an ordinary join.', where, tat);
+        /* Steht auf einer Seite der Block, der den räumlichen Schritt ausführt, dann ist er
+           getan und das Skript enthält ihn. Die Warnung riete dann dazu, genau das zu tun, was
+           man schon tut, und stünde als offener Punkt auf einer richtigen Arbeitsfläche. Das ist
+           die Hausregel von oben: die Ursache melden, nie ihre Folge. */
+        const macht = A.spatial || B.spatial;
+        if (macht) {
+          add('info', `${ta.label} becomes an area on the map, and that step is in the script`,
+            p.why + ' The block in between does it: it reads the boundaries, puts every point in the polygon it falls in and hands on an area code.',
+            'Check the three things it decides: the reference date of the boundaries, the coordinate system of your points, and what happens to a point that falls in no polygon.', where,
+            { label: 'Show me in the code', do: 'showCode', lang: 'r', pattern: 'st_join' });
+        } else {
+          add('warn', `${ta.label} and ${tb.label} meet on the map, not in a table`,
+            p.why, 'Do the spatial step once, in a GIS or with <code>sf</code>, and save the result as a table with an area code. Everything after that is an ordinary join.', where, tat);
+        }
       }
       if (p.mode === 'derive') {
         const grob = (ta.rank || 0) <= (tb.rank || 0) ? ta : tb;
@@ -1043,6 +1220,114 @@ function runChecks() {
   /* Alles, was den fertigen Schritt betrifft, wird am Schritt geprüft und nicht an der
      einzelnen Kante: ein Block kann über zwei Kanten andocken, Gebiet an der einen, Jahr an
      der anderen, und das ist völlig in Ordnung. */
+  /* ------------------------------------------------------------ raeumliche Masse */
+  S.nodes.filter((n) => n.kind === 'measure').forEach((n) => {
+    const m = MEASURES[n.measure];
+    if (!m) return;
+    const where = n.title;
+    const q = measureParams(n);
+    const meine = edgesOf(n.id);
+
+    if (!meine.length) {
+      const b = baseNode();
+      const punkt = b && b.keys.find((k) => k.type === 'coord');
+      add('err', `\u201c${n.title}\u201d is not attached to anything`,
+        'A spatial measure starts from the coordinate of a case. Until it is linked to one, it produces nothing.',
+        punkt ? 'Drag a line from the coordinate column of your analysis table to this block.'
+              : 'Your analysis table has no coordinate column yet. Add one, or use the geocoding bridge.', where,
+        /* 'pair' liest aNode/aKey/bNode/bKey. Hier standen from/to, also kamen vier
+           undefined an, addEdgeQuiet fand keine Schluessel und tat nichts: der Knopf sah
+           aus wie jeder andere und war tot. Genau die Pruefung trifft man am haeufigsten,
+           weil ein frisch abgelegtes Mass an nichts haengt. */
+        punkt ? { label: `Link ${punkt.name} to ${(n.keys.find((k) => k.type === 'coord') || {}).name}`,
+                  do: 'pair', aNode: b.id, aKey: punkt.id,
+                  bNode: n.id, bKey: (n.keys.find((k) => k.type === 'coord') || {}).id }
+              : { label: 'Show me the palette', do: 'showPalette', group: 'Bridges and lookups' });
+    } else {
+      const anTypen = [];
+      meine.forEach((e) => {
+        const andere = nodeById(e.from.node === n.id ? e.to.node : e.from.node);
+        e.pairs.forEach((pr) => {
+          const kAnd = keyOf(andere, e.from.node === n.id ? pr.to : pr.from);
+          if (kAnd) anTypen.push(kAnd.type);
+        });
+      });
+      if (anTypen.length && !anTypen.includes('coord')) {
+        add('warn', `\u201c${n.title}\u201d is measuring from an area, not from a case`,
+          `It is attached to a ${(KEYS[anTypen[0]] || {}).label || 'area'} column. Every case in that area then gets the same value, measured from the area\u2019s centroid, which is a property of the area and not of the person.`,
+          'Attach it to a coordinate column instead. If you only have area codes, say in the write-up that the measure is an area characteristic.', where,
+          { label: 'Show me the block', do: 'showNode', node: n.id });
+      }
+    }
+
+    if (!q.overpass && (!n.params || !n.params.target)) {
+      add('warn', `\u201c${n.title}\u201d has no target layer yet`,
+        `It is set to the placeholder \u201c${q.target}\u201d, so the generated code reads ${q.targetFile}, which does not exist.`,
+        'Pick one of the OpenStreetMap layers in the block, or name the layer you already have: the pharmacies, the schools, the stations.', where,
+        { label: 'Show me the block', do: 'showNode', node: n.id });
+    }
+
+    /* Bei einer OSM-Ebene ist nicht die Technik das Problem, sondern die Erfassung. Sie ist
+       ungleich, und zwar am duennsten auf dem Land, also genau dort, wo eine Entfernung zur
+       naechsten Apotheke am meisten aussagt. Das gehoert vor die Auswertung, nicht in eine
+       Fussnote danach. */
+    if (q.overpass) {
+      add('info', `\u201c${n.title}\u201d rests on how completely OpenStreetMap is mapped`,
+        `${q.target} (${q.osmTag}): taginfo counted ${q.osmN ? q.osmN.toLocaleString('en-US') : 'them'} in Germany${q.osmAsOf ? ' on ' + q.osmAsOf : ''}. ` +
+        'Coverage is uneven and thinnest in rural areas, so a case can look far from the nearest one because nobody has mapped it yet, not because it is far.',
+        'Check the count in one region you know before you use the column, and say in the paper which day you downloaded the layer. The script writes that date next to the file.', where,
+        { label: 'Show me the block', do: 'showNode', node: n.id });
+    }
+
+    const stell = ['radius', 'bandwidth', 'k'].find((x) => m.params.includes(x));
+    if (stell) {
+      add('info', `\u201c${n.title}\u201d stands or falls on its ${stell}`,
+        `${m.decision} It is set to ${q[stell]}${stell === 'k' ? '' : ' m'}.`,
+        'Run the analysis at two or three settings and report that you did. A result that only holds at one of them is a result about that setting.', where,
+        { label: 'Show me the setting', do: 'showNode', node: n.id });
+    }
+  });
+
+  /* Zwei Indikatoren desselben Maßes nebeneinander: das Register weiß, ob sie durch dasselbe
+     teilen. Das ist der Moment, in dem es zählt, nicht hinterher beim Schreiben. Die Daten
+     kommen erst nach dem Laden; solange sie fehlen, wird nichts behauptet. */
+  const mitFassung = S.nodes.filter((n) => n.kind === 'regional')
+    .map((n) => ({ n, bg: registerBegriff(n.pick ? n.pick.label : n.title), f: fassungFuer(n) }))
+    .filter((x) => x.bg && x.f);
+  const proBegriff = {};
+  mitFassung.forEach((x) => { (proBegriff[x.bg.id] = proBegriff[x.bg.id] || []).push(x); });
+  Object.values(proBegriff).forEach((gruppe) => {
+    if (gruppe.length < 2) return;
+    const [a, b] = gruppe;
+    const erg = fassungenVergleichen(a.f, b.f);
+    const wo = `${a.n.title} \u2194 ${b.n.title}`;
+    if (erg.urteil.art === 'nenner') {
+      add('err', 'Two of your indicators measure the same thing differently',
+        `\u201c${esc(a.n.title)}\u201d divides by <b>${esc(a.f.nenner)}</b>, ` +
+        `\u201c${esc(b.n.title)}\u201d by <b>${esc(b.f.nenner)}</b>. ` +
+        'They are both called a ' + esc(a.bg.de || a.bg.title) + ', and putting them in one model ' +
+        'as if they were the same quantity is the mistake the Measure Register exists for.',
+        'Pick one of the two, or keep both and say in the paper that they are built differently. ' +
+        'The generated script records the denominator of each, so the choice survives.', wo,
+        { label: 'See the two side by side', do: 'open',
+          url: REGISTER_SITE + '?m=' + encodeURIComponent(a.bg.id) });
+    } else if (erg.urteil.art === 'unbekannt') {
+      add('warn', 'Two indicators of the same measure, and one does not state its denominator',
+        `Both are a ${esc(a.bg.de || a.bg.title)}. The register has the denominator for ` +
+        `${a.f.nenner ? esc(a.n.title) : esc(b.n.title)} and not for the other.`,
+        'Look the missing one up at the source before you compare the two.', wo,
+        { label: 'See the two side by side', do: 'open',
+          url: REGISTER_SITE + '?m=' + encodeURIComponent(a.bg.id) });
+    } else if (erg.unterschiede) {
+      add('info', `Two indicators of the same measure, ${erg.unterschiede} difference${erg.unterschiede === 1 ? '' : 's'}`,
+        `Same denominator, but the sources differ on ` +
+        esc(erg.zeilen.filter((z) => z.anders).map((z) => z.titel.toLowerCase()).join(', ')) + '.',
+        'Reference period and boundary vintage are what usually explain a gap between two otherwise identical figures.', wo,
+        { label: 'See the two side by side', do: 'open',
+          url: REGISTER_SITE + '?m=' + encodeURIComponent(a.bg.id) });
+    }
+  });
+
   chain().steps.forEach((st) => {
     const reg = st.node;
     const where = reg.title;
@@ -1100,6 +1385,20 @@ function runChecks() {
         }
       } else {
         add('ok', 'The years line up', `Your period ${from} to ${to} sits inside the ${reg.y0} to ${reg.y1} this table covers.`, '', where);
+      }
+      /* Eine Tabelle mit genau einem Stichtag ist keine Zeitreihe. Sie auf jedes Jahr zu legen
+         ist verbreitet und vertretbar, aber es ist eine Annahme und keine Messung. */
+      if (reg.y0 === reg.y1 && to > from && e.time !== 'spread') {
+        add('warn', `\u201c${reg.title}\u201d is one reference date, not a series`,
+          `This table describes ${reg.y0} only, while your analysis runs ${from} to ${to}. Matched on the year, every row outside ${reg.y0} comes back empty.`,
+          'You can carry the one value across all your years, which treats it as a fixed characteristic of the area. That is defensible for something that moves slowly and wrong for anything that does not, and it belongs in the write-up either way.', where,
+          { label: 'Carry it across all years', do: 'time', mode: 'spread', edges: st.edges.map((x) => x.id) });
+      }
+      if (e.time === 'spread') {
+        add('info', 'The link carries one reference date across every year',
+          `Every row gets the ${reg.y0} value of its area, whichever year the row is from. The year is not part of the match.`,
+          'Say so in the write-up, and treat the column as a fixed area characteristic rather than as something measured in the row\u2019s own year.', where,
+          { label: 'Show me the setting', do: 'showEdge', edge: (st.edges[0] || {}).id });
       }
       if (e.time === 'nearest' || e.time === 'lag1') {
         add('info', st.time === 'lag1' ? 'The link uses the previous year on purpose' : 'The link uses the nearest available year',
@@ -1169,9 +1468,37 @@ function runChecks() {
         });
       });
     }
-    /* Liegt schon eine Gebietsstands-Zuordnung auf der Fläche, wäre "füg eine hinzu" falsch. */
+    /* Liegt schon eine Gebietsstands-Zuordnung auf der Fläche, wäre "füg eine hinzu" falsch.
+       Aber auf der Fläche liegen heißt noch nichts: der Block muss DURCHLAUFEN werden, der alte
+       Code kommt auf ags_old an und ags_2023 geht weiter. Steht er daneben, ohne dass etwas
+       hindurchläuft, ändert er am Ergebnis nichts, und die Warnung muss bleiben. Genau das war
+       die Meldung: Block hinzugefügt, Hinweis bleibt stehen, und der Grund war unsichtbar. */
     const schonDa = S.nodes.find((x) => x.tplId === 'xwalk_gebietsstand');
-    if (hits.length) {
+    const durchlaufen = (() => {
+      if (!schonDa) return false;
+      const um = umstellSpalten(schonDa);
+      if (!um) return false;
+      let rein = false, raus = false;
+      S.edges.forEach((e) => {
+        e.pairs.forEach((q) => {
+          const anMir = e.from.node === schonDa.id ? q.from : e.to.node === schonDa.id ? q.to : null;
+          if (!anMir) return;
+          if (anMir === um.alt.id) rein = true;
+          if (anMir === um.neu.id) raus = true;
+        });
+      });
+      return rein && raus;
+    })();
+    if (hits.length && durchlaufen) {
+      /* Der Fall, den es vorher nicht gab: die Umstellung ist eingebaut und läuft durch, also
+         ist das Thema erledigt und die Prüfung sagt das auch. */
+      add('ok', `Your period crosses ${hits.length} district reform${hits.length === 1 ? '' : 's'}, and you route around them`,
+        'The <b>District boundary crosswalk</b> is in the chain: the old code arrives on <code>' +
+        esc(umstellSpalten(schonDa).alt.name) + '</code> and <code>' + esc(umstellSpalten(schonDa).neu.name) +
+        '</code> carries on. Both sides are therefore on one reference date.' +
+        '<ul>' + hits.map((r) => `<li><b>${r.year}, ${esc(r.where)}.</b> ${esc(r.what)}</li>`).join('') + '</ul>',
+        'Check that the crosswalk file you download is on the same reference date as the regional table. INKAR and the BBSR system use the 2023 boundaries.', '');
+    } else if (hits.length) {
       add(usesRek ? 'info' : 'warn', `Your period crosses ${hits.length} district reform${hits.length === 1 ? '' : 's'}`,
         'District codes are not stable over time. When districts merge, old codes disappear and a new one appears, so the same place carries different codes in different years and a naive join loses exactly those places.' +
         '<ul>' + hits.map((r) => `<li><b>${r.year}, ${esc(r.where)}.</b> ${esc(r.what)}</li>`).join('') + '</ul>' +
@@ -1180,10 +1507,10 @@ function runChecks() {
           ? 'Make sure the regional table is on the same reference date. INKAR and the BBSR reference system are on the 2023 boundaries, which is what <code>kkz_rek</code> uses.'
           : ('Use a key that has been recoded to one reference date on both sides. In SOEP that is <code>kkz_rek</code> (boundaries of 31.12.2023) rather than <code>kkz</code>. ' +
              (schonDa
-               ? 'The <b>District boundary crosswalk</b> is already on your canvas: route the district codes through it, from the old code to <code>ags_old</code> and from <code>ags_2023</code> on to the other side.'
+               ? '<b>The crosswalk block is on your canvas but nothing runs through it</b>, so it changes nothing yet. The district codes have to enter it on <code>ags_old</code> and leave on <code>ags_2023</code> towards the other side.'
                : 'Otherwise put a <b>District boundary crosswalk</b> block in between.')),
         '', rekTat || (schonDa
-          ? { label: 'Show me the crosswalk you already added', do: 'showNode', node: schonDa.id }
+          ? { label: 'Route the codes through it', do: 'routeXwalk', node: schonDa.id }
           : { label: 'Show me the crosswalk block', do: 'showPalette', card: 'District boundary crosswalk' }));
     } else {
       add('ok', 'No district reform falls in your period', 'Between ' + S.years.from + ' and ' + S.years.to + ' the district boundaries did not change, so the codes are comparable across your years.', '');
@@ -1268,6 +1595,22 @@ function runChecks() {
       `A postcode that lies in two districts appears twice in this table, once per district, with a share in <code>${esc(n.weightCol)}</code>. Attaching it therefore turns one row of yours into two, and any count you run afterwards is inflated.`,
       'Decide before you join: keep only the largest share per unit (one row again, and you accept a small misallocation), or keep all rows and collapse back afterwards with a weighted mean. The script does the second and marks the place.', n.title,
       { label: 'Keep only the largest share', do: 'largest', node: n.id });
+
+    /* Der teuerste Teil daran, und der stillste: das Hochrechnungsgewicht wird mitvervielfacht. */
+    const bW = baseNode();
+    if (bW && !n.pickLargest) {
+      if (bW.surveyWeight) {
+        add('info', `The survey weight is split along ${n.weightCol}`,
+          `A case that lies in two areas becomes two rows, and each carries the full <code>${esc(bW.surveyWeight)}</code>. Left alone, that case counts twice and your weighted totals grow out of nothing.`,
+          `The script writes <code>${esc(bW.surveyWeight)}_split = ${esc(bW.surveyWeight)} * ${esc(n.weightCol)}</code> and checks that the total is unchanged. Use the split weight wherever you would have used the original.`, n.title,
+          { label: 'Show me that line', do: 'showCode', lang: 'r', pattern: '_split' });
+      } else {
+        add('warn', 'Name your survey weight, or it will be silently multiplied',
+          `\u201c${esc(n.title)}\u201d turns one case into several rows. If your analysis table carries a survey weight and it is not split along <code>${esc(n.weightCol)}</code>, every split case counts once per area and the weighted totals grow out of nothing.`,
+          'Put the name of the weight column on the analysis block. The script then splits it and checks that the total did not move.', n.title,
+          { label: 'Show me the analysis block', do: 'showNode', node: bW.id });
+      }
+    }
   });
 
   /* Quellenspezifisches. */
@@ -1332,13 +1675,46 @@ function chain() {
       (e.from.node === next && visited.has(e.to.node)) || (e.to.node === next && visited.has(e.from.node)));
     visited.add(next);
     order.push(n);
-    steps.push(makeStep(n, edges));
+    steps.push(makeStep(n, edges, order));
   }
-  return { order, steps, stranded: S.nodes.filter((n) => !visited.has(n.id)) };
+  /* Ein Mass ist keine Tabelle, die verbunden wird: es haengt eine Spalte an die Analysetabelle
+     und muss vor jedem Verbund laufen. Es bleibt in `order`, damit die Anschlusspruefungen es
+     sehen, und faellt aus `steps` heraus, damit der Verbundteil es nie zu mergen versucht. */
+  const measures = order.filter((n) => n.kind === 'measure');
+  const joinSteps = steps.filter((st) => st.node.kind !== 'measure');
+  return { order, steps: joinSteps, measures,
+           stranded: S.nodes.filter((n) => !visited.has(n.id)) };
+}
+
+/* Die Parameter, mit denen ein Mass wirklich laeuft: was gesetzt wurde, Luecken gefuellt.
+   `out` folgt aus dem Ziel, damit ein frischer Block schon eine brauchbare Spalte erzeugt. */
+function measureParams(n) {
+  const m = MEASURES[n.measure];
+  const p = { ...(n.params || {}) };
+  m.params.forEach((k) => { if (p[k] === undefined || p[k] === '') p[k] = MEASURE_PARAMS[k].def; });
+  /* Eine Zielebene aus dem Katalog traegt ihre Herkunft mit: den Tag, die fertige Abfrage, die
+     Objektzahl und deren Stand. Das erzeugte Skript besorgt sie damit selbst, statt den Namen
+     einer Datei zu nennen, die es nicht gibt. Der getippte Name bleibt der andere Weg, denn die
+     meisten bringen ihre eigene Ebene mit. */
+  const z = p.targetId && (S.cat.targets || []).find((x) => x.id === p.targetId);
+  if (z) {
+    p.target = z.label;
+    p.osmTag = z.tag; p.overpass = z.overpass;
+    p.osmN = z.n; p.osmAsOf = z.asOf; p.osmUrl = z.url;
+  }
+  /* Umlaute zuerst umschreiben, sonst wird aus "Spielplaetze" die Datei spielpl_tze.gpkg:
+     haesslich, und zwei verschiedene Ebenen koennen auf denselben Namen fallen. */
+  const slug = String(p.target || 'target').toLowerCase()
+    .replace(/\u00e4/g, 'ae').replace(/\u00f6/g, 'oe').replace(/\u00fc/g, 'ue').replace(/\u00df/g, 'ss')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'target';
+  if (!p.out) p.out = slug + m.outSuffix;
+  p.targetFile = slug + '.gpkg';
+  return p;
 }
 
 /* Ein Schritt bündelt alle Verbindungen, über die ein Block an das bisher Gebaute andockt. */
-function makeStep(node, edges) {
+function makeStep(node, edges, order) {
   const pairs = [];
   edges.forEach((e) => {
     const neuIstFrom = e.from.node === node.id;
@@ -1349,8 +1725,31 @@ function makeStep(node, edges) {
       if (kNeu && kAlt) pairs.push({ l: kAlt, r: kNeu, mode: q.mode, op: q.op, L: O, R: N });
     });
   });
+  /* Hängt ein Block über zwei Wege am schon Gebauten, etwa an der Analysetabelle UND an einem
+     anderen Regionalblock, dann kommt seine Schlüsselspalte zweimal vor. Aus zwei Paaren auf
+     dieselbe Spalte wurde eine Verbundbedingung, die sich selbst widerspricht
+     (`by = c("ags", "year", "district" = "ags", "year")`), und dplyr brach mit einer Meldung
+     ab, die niemand auf diese Stelle zurückführt; in Stata stand der Schlüssel doppelt in der
+     merge-Zeile. Je Spalte zählt die erste Verbindung, und die erste ist die zum bereits
+     Gebauten, weil chain() die Kanten in dieser Reihenfolge sammelt. */
+  /* Und wenn beide Wege dieselbe Spalte anbieten, zählt der Weg, der näher an der
+     Analysetabelle liegt. Über den anderen wurde auf eine Spalte verbunden, die der Verbund
+     davor gar nicht behält: dplyr führt den linken Namen weiter, der rechte verschwindet,
+     und der zweite Verbund suchte ihn vergeblich. */
+  const rang = (n) => {
+    const i = (order || []).indexOf(n);
+    return i < 0 ? 99 : i;
+  };
+  pairs.sort((a, b) => rang(a.L) - rang(b.L));
+  const gesehen = new Set();
+  const eindeutig = pairs.filter((q) => {
+    const marke = `${q.r.id}|${q.l.id}`;
+    if (gesehen.has(q.r.id) || gesehen.has(marke)) return false;
+    gesehen.add(q.r.id); gesehen.add(marke);
+    return true;
+  });
   const erste = edges[0] || { join: 'left', time: 'exact' };
-  return { node, right: node.id, edges, pairs, join: erste.join, time: erste.time,
+  return { node, right: node.id, edges, pairs: eindeutig, join: erste.join, time: erste.time,
            edge: erste, left: (edges[0] ? (edges[0].from.node === node.id ? edges[0].to.node : edges[0].from.node) : null) };
 }
 
@@ -1363,7 +1762,25 @@ function benenneQuelle(n) {
   /* Nicht "inkar_inkar_...": wenn der Titel die Quelle schon nennt, reicht der Titel. */
   return titel.toLowerCase().startsWith(q.toLowerCase()) ? titel : q + '_' + titel;
 }
-const varName = (n) => {
+/* Zwei Blöcke derselben Quelle bekamen denselben Objektnamen: der Name entsteht aus
+   Quellenschlüssel und Titel und wird auf 26 Zeichen gekürzt, und "Eckwerte SGB II" und
+   "Eckwerte SGB III" sind nach dem Kürzen beide ba_arbeitsmarktreport_eckw. Im Skript las
+   dann das zweite read_csv2 über das erste, beide Verbünde hingen dieselbe Tabelle an, und
+   nichts sagte etwas. 19 der 236 Produkte im Katalog teilen sich so einen Namen. Deshalb
+   vergibt jedes Skript seine Namen einmal für die ganze Kette und hängt eine Nummer an, wo
+   ein Name zum zweiten Mal vorkommt. */
+function varNamenFuer(order) {
+  const zahl = new Map(), map = new Map();
+  order.forEach((n) => {
+    const roh = varNameRoh(n);
+    const k = (zahl.get(roh) || 0) + 1;
+    zahl.set(roh, k);
+    map.set(n.id, k === 1 ? roh : `${roh}_${k}`);
+  });
+  return (n) => (n && map.get(n.id)) || varNameRoh(n);
+}
+
+const varNameRoh = (n) => {
   const raw = (n.tplId === 'regionl' ? 'regionl'
     : n.tplId === 'soep_person' ? 'ppathl'
     : n.tplId === 'soep_hh' ? 'hgen'
@@ -1372,6 +1789,8 @@ const varName = (n) => {
   return raw.toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
     .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 26) || 'tab';
 };
+
+const varName = varNameRoh;
 
 function headerLines(title) {
   const base = baseNode();
@@ -1383,17 +1802,47 @@ function headerLines(title) {
     `# Analysis table: ${base ? base.title : '(none)'}, years ${S.years.from} to ${S.years.to}.`,
     `# This is a plan you still have to check against the files you actually downloaded:`,
     `# column names differ between exports, and the builder can only guess them.`,
+    ...herkunftZeilen('#'),
     `# ${'-'.repeat(72)}`
   ];
 }
 
+/* Welche Fassung eines Maßes hier steckt, im Kopf des Skripts. Ohne das lebt die Entscheidung
+   nur in einem Browser-Tab: zwei Monate später steht in der Auswertung "Arbeitslosenquote" und
+   niemand weiß mehr, ob durch alle zivilen Erwerbspersonen geteilt wurde oder durch die
+   abhängigen. Die Herkunft gehört an die Zahl, nicht in die Erinnerung. */
+function herkunftZeilen(mark) {
+  const raus = [];
+  S.nodes.filter((n) => n.kind === 'regional').forEach((n) => {
+    const f = fassungFuer(n);
+    if (!f) return;
+    const bg = registerBegriff(n.pick ? n.pick.label : n.title);
+    if (!raus.length) {
+      raus.push(`${mark}`);
+      raus.push(`${mark} Which version of each measure this is (from the GeoLAB Measure Register).`);
+      raus.push(`${mark} Keep these lines: two figures with the same name and different denominators`);
+      raus.push(`${mark} are different quantities, and nothing downstream will tell you.`);
+    }
+    raus.push(`${mark}   ${n.title}`);
+    raus.push(`${mark}     measure:    ${(bg && (bg.de || bg.title)) || 'n/a'}`);
+    raus.push(`${mark}     divided by: ${f.nenner || (f.art ? 'not a ratio, ' + f.art : 'NOT STATED by the source')}`);
+    if (f.zeitbezug) raus.push(`${mark}     period:     ${f.zeitbezug}`);
+    if (f.gebietsstand) raus.push(`${mark}     boundaries: ${f.gebietsstand}`);
+    if (f.formel) raus.push(`${mark}     formula:    ${String(f.formel).slice(0, 90)}`);
+    raus.push(`${mark}     source:     ${f.quelle_name || n.sourceLabel || ''}`);
+  });
+  return raus;
+}
+
 function genR() {
-  const { order, steps } = chain();
+  const { order, steps, measures } = chain();
   if (!order.length) return '# Put your analysis table on the canvas first.';
+  const varName = varNamenFuer(order);
   const L = headerLines('Linking survey microdata to German regional data');
   L.push('', 'library(dplyr)', 'library(readr)', '');
 
   order.forEach((n, i) => {
+    if (n.kind === 'measure') return;   // hat keine Datei; eigener Abschnitt weiter unten
     const v = varName(n);
     L.push(`# ${i + 1}. ${n.title}  (${n.unit})`);
     if (n.restricted) L.push(`#    Restricted data: this step runs inside the research data centre.`);
@@ -1427,11 +1876,48 @@ function genR() {
     L.push('');
   });
 
+  /* Raeumliche Masse: sie haengen am Punkt der Analysetabelle und erzeugen je eine Spalte,
+     laufen also vor jedem Verbund. Danach ist die Analysetabelle um diese Spalten breiter. */
+  if (measures.length) {
+    const baseV0 = varName(order[0]);
+    L.push('# ' + '-'.repeat(72));
+    L.push('# Spatial measures. Each one adds a column to the analysis table, so they run before');
+    L.push('# any join. All of them need projected coordinates: 25832 is ETRS89 / UTM 32N, in metres.');
+    L.push('# ' + '-'.repeat(72));
+    L.push('library(sf)');
+    L.push(`pts <- sf::st_as_sf(${baseV0}, coords = c("lon", "lat"), crs = 4326) |> sf::st_transform(25832)`);
+    L.push('');
+    measures.forEach((n) => {
+      const m = MEASURES[n.measure], q = measureParams(n);
+      L.push(`# ${n.title}: ${q.out}`);
+      L.push(...wrapComment(m.decision));
+      zielVorlauf(q).forEach((line) => L.push(line));
+      m.r(q).forEach((line) => L.push(line));
+      L.push('');
+    });
+    L.push(`${baseV0} <- sf::st_drop_geometry(pts)`);
+    L.push('');
+  }
+
   /* Abgeleitete Schlüssel, etwa Kreis aus Gemeinde. */
   steps.forEach((s) => {
     pairsFor(s).forEach((p) => {
+      if (p.mode === 'derive' && p.op === 'gridcoarsen') {
+        /* INSPIRE: 100mN26895E43370 liegt in 1kmN2689E4337. Die groebere Kennung wird aus den
+           Zahlen der feineren gebaut, ein Praefix der Zeichenkette waere die falsche Antwort. */
+        const fine = p.l.type === 'grid100' ? p : { ...p, l: p.r, r: p.l, L: p.R, R: p.L };
+        const v = varName(fine.L);
+        L.push(`# ${fine.L.title}: the 1 km cell that each 100 m cell lies in`);
+        L.push(`${v}$cell_1km <- sprintf("1kmN%sE%s",`);
+        L.push(`  substr(sub("E.*$", "", sub("^100mN", "", ${v}$\`${fine.l.name}\`)), 1, 4),`);
+        L.push(`  substr(sub("^.*E", "", ${v}$\`${fine.l.name}\`), 1, 4))`, '');
+        return;
+      }
       if (p.mode !== 'derive' || p.op !== 'truncate') return;
       const short = (KEYS[p.l.type].rank <= KEYS[p.r.type].rank) ? p : { ...p, l: p.r, r: p.l, L: p.R, R: p.L };
+      /* Wird gleich aggregiert, entsteht der gröbere Schlüssel dort in der group_by. Die
+         abgeleitete Spalte hier wäre toter Code, auf den danach noch geprüft würde. */
+      if (short.R.aggregate) return;
       const digits = KEYS[short.l.type].digits || 5;
       const v = varName(short.R);
       L.push(`# ${short.R.title}: cut the ${KEYS[short.r.type].label.toLowerCase()} down to its ${KEYS[short.l.type].label.toLowerCase()}`);
@@ -1467,6 +1953,9 @@ function genR() {
         L.push(`# CHOOSE THE WEIGHT: a plain mean over the small areas is NOT the value of the`);
         L.push(`# larger one, because the small areas differ in size. Population is the usual choice;`);
         L.push(`# for counts, sum them and divide by the summed denominator instead.`);
+        L.push(`if (!"weight" %in% names(${v})) {`);
+        L.push(`  stop("Aggregation step: set the weight column. There is no column called 'weight' in ${v}; put the population (or the denominator of your rate) there.")`);
+        L.push(`}`);
         L.push(`${v} <- ${v} |>`);
         L.push(`  group_by(${nach}) |>`);
         L.push(`  summarise(across(where(is.numeric), ~ weighted.mean(.x, w = weight, na.rm = TRUE)),`);
@@ -1481,21 +1970,109 @@ function genR() {
     if (!ps.length || !R) return;
     if (R.weightCol && !R.pickLargest) {
       /* Eine gewichtete Zuordnungstabelle ist absichtlich nicht eindeutig; hier zu prüfen
-         hieße, das Skript an genau der Stelle abbrechen zu lassen, die so gewollt ist. */
-      L.push(`# ${R.title} has several rows per key on purpose, so no uniqueness check here.`, '');
+         hieße, das Skript an genau der Stelle abbrechen zu lassen, die so gewollt ist.
+         Was aber geprueft werden MUSS: dass die Anteile je Einheit auf eins aufgehen. Tun sie
+         das nicht, gewichtet der Verbund die Stichprobe still um. */
+      const vW = varName(R);
+      const geoK = ps.filter((q) => KEYS[q.r.type].family === 'geo').map((q) => rightCol(q));
+      const grp = (geoK.length ? geoK : [rightCol(ps[0])]).map((c) => `\`${c}\``).join(', ');
+      L.push(`# ${R.title} has several rows per key on purpose, so no uniqueness check here.`);
+      L.push(`# The shares must still add up to one per unit, otherwise the join quietly reweights`);
+      L.push(`# your sample. 1e-6 allows for the rounding in the published table.`);
+      L.push(`if (!is.numeric(${vW}$${R.weightCol})) stop(`);
+      L.push(`  "${R.title}: the column ${R.weightCol} did not read as a number. A German export`);
+      L.push(`   writes 0,6 and read_csv2 expects that; a file with 0.6 has to be read with read_csv.")`);
+      L.push(`.s <- ${vW} |> group_by(${grp}) |> summarise(.t = sum(${R.weightCol}), .groups = "drop")`);
+      L.push(`stopifnot(all(abs(.s$.t - 1) < 1e-6))`, '');
       return;
     }
     const v = varName(R);
+    /* Eine Tabelle, die erst durch ein Rezept entsteht, hat die Schlüsselspalten des Blocks
+       nicht: der räumliche Schritt liefert gem und krs, keine Spalte "lon_lat". Geprüft wurde
+       trotzdem auf sie, und jedes Skript mit Koordinaten brach ab, bevor irgendetwas
+       verknüpft war. Das Rezept prüft selbst, ob es Zeilen vervielfacht hat. */
+    if (R.recipe && R.recipe.r) return;
+    /* Nach einer Aggregation heißt der Schlüssel wie die Gruppe, nicht mehr wie die
+       abgeleitete Spalte, aus der er entstand. */
+    const geoAgg = R.aggregate ? ps.find((q) => KEYS[q.l.type].family === 'geo') : null;
+    if (geoAgg) {
+      const zeitAgg = ps.find((q) => KEYS[q.l.type].family === 'time');
+      const nachAgg = [`"${geoAgg.l.name}"`].concat(zeitAgg ? [`"${zeitAgg.r.name}"`] : []).join(', ');
+      L.push(`# ${R.title} must have one row per key, otherwise the join multiplies rows`);
+      L.push(`stopifnot(!anyDuplicated(${v}[c(${nachAgg})]))`, '');
+      return;
+    }
     const cols = ps.map((p) => `"${rightCol(p)}"`).join(', ');
+    /* Ist der Schlüssel der angespielten Seite erst durch Abschneiden entstanden, kann er gar
+       nicht eindeutig sein: in einem Bundesland liegen viele Kreise. Ein stopifnot bricht hier
+       zwar richtig ab, sagt aber nur "is not TRUE" und verschweigt den Grund. */
+    const abgeleitet = ps.some((p) => rightCol(p).endsWith('_derived'));
+    if (abgeleitet) {
+      L.push(`# ${R.title} is finer than the rows of your analysis table, so it has several`);
+      L.push(`# rows per key and there is no single value to attach. Aggregate it first and`);
+      L.push(`# choose the weight on purpose; the checks panel has the step.`);
+      L.push(`if (anyDuplicated(${v}[c(${cols})])) {`);
+      L.push(`  stop("${R.title.replace(/"/g, "'")} is finer than your unit of analysis: aggregate it to your level first, otherwise the join multiplies your rows.")`);
+      L.push(`}`, '');
+      return;
+    }
     L.push(`# ${R.title} must have one row per key, otherwise the join multiplies rows`);
     L.push(`stopifnot(!anyDuplicated(${v}[c(${cols})]))`, '');
   });
 
-  const baseV = varName(order[0]);
+  /* Der räumliche Schritt baut seine Tabelle AUS der Analysetabelle: points_with_areas ist
+     die Analysetabelle plus Gebietsspalten, Zeile für Zeile dieselbe. Sie noch einmal an sich
+     selbst zu verbinden ginge nicht einmal, denn die Spalte, auf der verbunden wurde
+     ("lon_lat"), steht in keiner der beiden Tabellen: das Skript brach dort ab. Die Kette
+     fängt deshalb bei der erzeugten Tabelle an, und der Schritt selbst entfällt. */
+  const raumSchritt = steps.find((s) => {
+    const R = nodeById(s.right);
+    return R && R.recipe && R.recipe.r && order.indexOf(R) === 1;
+  }) || null;
+  const startKnoten = raumSchritt ? nodeById(raumSchritt.right) : order[0];
+  const baseV = varName(startKnoten);
+
+  /* Ein Skript ohne einen einzigen Verbund sieht fertig aus und tut nichts. Wenn Blöcke auf
+     der Fläche liegen, die an nichts hängen, gehört das in den Code und nicht nur in die
+     Prüfliste rechts. */
+  const verwaist = chain().stranded.filter((n) => n.kind !== 'base');
+  if (!steps.length && verwaist.length) {
+    L.push(...wrapComment(`Nothing is attached yet: ${verwaist.map((n) => `“${n.title}”`).join(', ')} `
+      + `${verwaist.length > 1 ? 'are' : 'is'} on the canvas but not connected to your analysis `
+      + `table, so this script only reads your own file. Draw the link, or use the checks panel.`));
+    L.push('');
+  }
+
+  /* Zwei Gebietsgliederungen, die sich nur überlappen, haben keinen gemeinsamen Schlüssel.
+     Verbunden wurde bisher trotzdem, direkt auf den beiden Spalten: eine fünfstellige
+     Postleitzahl und ein fünfstelliger Kreisschlüssel treffen sich dort, wo die Ziffern
+     zufällig gleich sind, und das Skript hängt stillschweigend den Wert eines fremden
+     Gebiets an. Im Versuch traf das ein Viertel der Zeilen, ohne eine einzige Meldung. Die
+     Prüfung sagt es rechts, das Skript sagte es nicht; jetzt hält es an und nennt den Grund.
+     Wer es trotzdem will, streicht die Zeile, dann steht die Entscheidung wenigstens da. */
+  steps.forEach((st) => {
+    const R = nodeById(st.right);
+    if (!R || R.weightCol) return;                   // mit Brücke ist es ja geklärt
+    /* Eine Brücke IST die Auflösung: der räumliche Schritt macht aus dem Punkt eine Fläche,
+       die Zuordnungstabelle aus der Postleitzahl einen Kreis. An ihr zu bremsen hieße, den
+       Weg zu verbieten, auf den die Prüfung gerade verwiesen hat. */
+    if (R.kind === 'bridge' || (R.recipe && R.recipe.r)) return;
+    const schlimm = pairsFor(st).find((q) => (q.mode === 'weighted' || q.mode === 'spatial')
+                                             && KEYS[q.l.type].family === 'geo');
+    if (!schlimm) return;
+    const la = KEYS[schlimm.l.type].label, lb = KEYS[schlimm.r.type].label;
+    L.push(...wrapComment(`${la} and ${lb} do not nest into one another, so the two columns are `
+      + `not the same key. Joining them directly attaches a value wherever the codes happen to `
+      + `coincide, which is a different area. Put the bridge in (the checks panel has the step), `
+      + `or delete the stop below and say in the write-up what you did.`));
+    L.push(`stop("${la} and ${lb} overlap rather than nest: join them through a crosswalk, not directly.")`, '');
+  });
+
   L.push('# Join. Each step keeps the rows of the analysis table and attaches one table to them.');
   const joinLines = [`dat <- ${baseV}`];
   const pushJoin = (line) => joinLines.push(line);
   steps.forEach((s) => {
+    if (s === raumSchritt) return;          // steckt schon in der Starttabelle
     const ps = pairsFor(s);
     if (!ps.length) return;
     const v = varName(nodeById(s.right));
@@ -1509,7 +2086,14 @@ function genR() {
       }
     }
     const aggregiert = !!nodeById(s.right).aggregate;
-    const by = ps.map((p) => {
+    /* "Stichtag ausbreiten": das Jahr ist kein Schluessel mehr. Bliebe es einer, traefe genau
+       ein Jahrgang und der Rest kaeme leer zurueck, was diese Einstellung gerade vermeidet. */
+    let psJoin = ps;
+    if (s.time === 'spread') {
+      pushJoin(`  # ${nodeById(s.right).title} holds one reference date; it is carried across every year`);
+      psJoin = ps.filter((q) => KEYS[q.l.type].family !== 'time');
+    }
+    const by = psJoin.map((p) => {
       const l = p.lagged ? p.l.name + '_lag' : leftCol(p);
       const r = aggregiert && KEYS[p.l.type].family === 'geo' ? p.l.name : rightCol(p);
       return l === r ? `"${l}"` : `"${l}" = "${r}"`;
@@ -1535,13 +2119,36 @@ function genR() {
   L.push('');
   const wt = order.find((n) => n.weightCol && !n.pickLargest);
   if (wt) {
-    L.push(`# ${wt.title} split some of your rows: each ${''}unit that lies in more than one area`);
-    L.push('# now appears once per area. Collapse back to one row per case with a weighted mean,');
-    L.push('# and do it before you count anything:');
+    const caseCols = order[0].keys.map((k) => `"${k.name}"`).join(', ');
+    const sw = order[0].surveyWeight;
+    L.push(`# ${wt.title} split some of your rows: each unit that lies in more than one area`);
+    L.push('# now appears once per area, so the rows of dat are no longer your cases.');
+    L.push('# Two honest ways on, and they answer different questions.');
+    L.push('');
+    L.push('# (a) One context value per case. Collapse back with the allocation share as the weight.');
     L.push('# dat <- dat |>');
-    L.push(`#   group_by(across(all_of(c(${order[0].keys.map((k) => `"${k.name}"`).join(', ')})))) |>`);
+    L.push(`#   group_by(across(all_of(c(${caseCols})))) |>`);
     L.push(`#   summarise(across(where(is.numeric), ~ weighted.mean(.x, ${wt.weightCol}, na.rm = TRUE)), .groups = "drop")`);
-    L.push('# The alternative is to keep only the largest share per case, before the join:');
+    L.push('');
+    L.push('# (b) Keep the split rows, for example to use area fixed effects.');
+    if (sw) {
+      /* Genau hier blaeht eine gewichtete Zuordnung eine Stichprobe still auf: jede
+         Teilzeile traegt das volle Hochrechnungsgewicht. */
+      L.push(`#     Then the survey weight has to be split too: as it stands every one of those`);
+      L.push(`#     rows carries the full ${sw}, so the case counts once per area and the`);
+      L.push(`#     weighted totals grow out of nothing.`);
+      L.push(`dat <- dat |> mutate(${sw}_split = ${sw} * ${wt.weightCol})`);
+      L.push(`# Use ${sw}_split wherever you would have used ${sw}, and check nothing moved:`);
+      L.push(`stopifnot(abs(sum(dat$${sw}_split, na.rm = TRUE) -`);
+      L.push(`               sum(${varName(order[0])}$${sw}, na.rm = TRUE)) < 1)`);
+    } else {
+      L.push(`#     If your analysis table carries a survey weight, it has to be multiplied by`);
+      L.push(`#     ${wt.weightCol} here, otherwise a split case counts once per area and the`);
+      L.push(`#     weighted totals grow out of nothing. Name the weight on the analysis block`);
+      L.push(`#     to have this written for you.`);
+    }
+    L.push('');
+    L.push('# (c) Or avoid the split entirely by keeping the largest share, before the join:');
     L.push(`# ${varName(wt)} <- ${varName(wt)} |> group_by(${wt.keys[0].name}) |> slice_max(${wt.weightCol}, n = 1) |> ungroup()`);
     L.push('');
   }
@@ -1554,9 +2161,26 @@ function genR() {
   return L.join('\n');
 }
 
+/* Gebietsschlüssel bleiben Text, sonst frisst Stata die führende Null. Das galt bisher nur für
+   die zugespielten Tabellen; die Analysetabelle ging leer aus, und ihr Schlüssel blieb eine Zahl.
+   Im merge trifft eine Zahl dann auf einen Text, und Stata bricht ab. Das R-Skript macht diesen
+   Schritt für die eigene Tabelle längst, die Stata-Fassung nicht. */
+function alsText(L, n) {
+  n.keys.filter((k) => ['ags2', 'ags3', 'ags5', 'ags8', 'plz'].includes(k.type)).forEach((k) => {
+    const w = { ags2: 2, ags3: 3, ags5: 5, ags8: 8, plz: 5 }[k.type];
+    L.push(`capture confirm string variable ${k.name}`);
+    L.push(`if _rc {`);
+    L.push(`    gen str${w} ${k.name}_s = string(${k.name}, "%0${w}.0f")   // area codes stay text`);
+    L.push(`    drop ${k.name}`);
+    L.push(`    rename ${k.name}_s ${k.name}`);
+    L.push(`}`);
+  });
+}
+
 function genStata() {
-  const { order, steps } = chain();
+  const { order, steps, measures } = chain();
   if (!order.length) return '* Put your analysis table on the canvas first.';
+  const varName = varNamenFuer(order);
   const L = headerLines('Linking survey microdata to German regional data').map((l) => l.replace(/^#/, '*'));
   L.push('', 'version 17', 'clear all', 'set more off', '');
 
@@ -1565,6 +2189,7 @@ function genStata() {
      benennt man stattdessen im Master um, ist die Spalte beim nächsten merge weg. */
   const stepOf = (id) => steps.find((st) => st.right === id);
   order.slice(1).forEach((n, i) => {
+    if (n.kind === 'measure') return;   // erzeugt eine Spalte, keine Tabelle; Abschnitt am Ende
     const v = varName(n);
     const st = stepOf(n.id);
     const ps = st ? pairsFor(st) : [];
@@ -1579,17 +2204,27 @@ function genStata() {
       L.push('* Destatis exports write -, ., ... , / or x where a number is missing:');
       L.push('* foreach v of varlist _all { replace `v' + "' = \"\" if inlist(`v'" + ', "-", ".", "...", "/", "x") }');
     }
-    n.keys.filter((k) => ['ags2', 'ags3', 'ags5', 'ags8', 'plz'].includes(k.type)).forEach((k) => {
-      const w = { ags2: 2, ags3: 3, ags5: 5, ags8: 8, plz: 5 }[k.type];
-      L.push(`capture confirm string variable ${k.name}`);
-      L.push(`if _rc {`);
-      L.push(`    gen str${w} ${k.name}_s = string(${k.name}, "%0${w}.0f")   // area codes stay text`);
-      L.push(`    drop ${k.name}`);
-      L.push(`    rename ${k.name}_s ${k.name}`);
-      L.push(`}`);
+    alsText(L, n);
+    /* stringcols(_all) macht auch die Jahresspalte zu Text. Sie trifft im merge auf ein
+       numerisches Jahr (SOEP führt syear als Zahl), und Stata bricht dann ab: "variable syear
+       does not have the same type in master and using data". In R fällt das nicht auf, weil
+       read_csv2 die Spalten einzeln erkennt. */
+    n.keys.filter((k) => KEYS[k.type].family === 'time').forEach((k) => {
+      if (!n.reader) L.push(`destring ${k.name}, replace   // the year is a number on both sides`);
     });
     ps.forEach((q) => {
       const l = leftCol(q), r = rightCol(q);
+      /* Eine abgeleitete Spalte muss erst entstehen. Das R-Skript schneidet sie mit substr
+         ab; die Stata-Fassung hat sie nur umbenannt, und zwar eine Spalte, die es nirgends
+         gab: "rename state_derived state" auf einer Datei, die nur ags führt. Jedes Skript
+         mit einer gröberen Ebene brach damit an der ersten Zeile ab, die sie braucht. */
+      if (r.endsWith('_derived')) {
+        if (n.aggregate) return;                 // der collapse legt die Spalte selbst an
+        const d = KEYS[q.l.type].digits || 5;
+        L.push(`capture drop ${l}`);
+        L.push(`gen str${d} ${l} = substr(${q.r.name}, 1, ${d})   // ${KEYS[q.l.type].label.toLowerCase()} from ${KEYS[q.r.type].label.toLowerCase()}`);
+        return;
+      }
       if (l !== r) L.push(`rename ${r} ${l}   // the analysis table calls this ${l}`);
     });
     if (st && st.time === 'lag1') {
@@ -1606,31 +2241,110 @@ function genStata() {
       const zeit = ps.find((q) => KEYS[q.l.type].family === 'time');
       if (geo) {
         const grob = KEYS[geo.l.type].digits;
-        if (grob) L.push(`gen str${grob} ${geo.l.name} = substr(${leftCol(geo)}, 1, ${grob})`);
+        /* Abgeschnitten wird die Spalte dieser Datei, nicht die des Masters: hier stand
+           `gen str2 state = substr(state, 1, 2)`, also eine Ableitung aus sich selbst, und die
+           Spalte gab es auf dieser Seite gar nicht. Das R-Skript nimmt an dieser Stelle
+           richtig die eigene Schlüsselspalte. */
+        if (grob) {
+          L.push(`capture drop ${geo.l.name}`);
+          L.push(`gen str${grob} ${geo.l.name} = substr(${geo.r.name}, 1, ${grob})`);
+        }
         L.push(`* CHOOSE THE WEIGHT: a plain mean over the small areas is not the value of the`);
         L.push(`* larger one. Population is the usual choice; for counts, sum instead.`);
+        /* Gleiche Auskunft wie im R-Skript: "variable weight not found" sagt nicht, was zu tun ist. */
+        L.push(`capture confirm variable weight`);
+        L.push(`if _rc {`);
+        L.push(`    di as error "Aggregation step: set the weight column. There is no variable called 'weight' in ${v}; put the population (or the denominator of your rate) there."`);
+        L.push(`    exit 111`);
+        L.push(`}`);
         L.push(`collapse (mean) _all [aw=weight], by(${geo.l.name}${zeit ? ' ' + leftCol(zeit) : ''})`);
       }
     }
     if (ps.length && !(n.weightCol && !n.pickLargest)) {
       const keys = ps.map((q) => leftCol(q)).join(' ');
-      L.push(`isid ${keys}   // stops here if the key is not unique, which is what would multiply your rows`);
+      /* Ist der Schlüssel erst durch Abschneiden entstanden, kann er nicht eindeutig sein: in
+         einem Bundesland liegen viele Kreise. isid bricht dort zwar richtig ab, sagt aber nur
+         "do not uniquely identify the observations". Im R-Skript steht seit heute der Grund;
+         hier stand er nicht, und das ist derselbe Fehler in der anderen Sprache. */
+      const abgeleitet = ps.some((q) => rightCol(q).endsWith('_derived')) && !n.aggregate;
+      if (abgeleitet) {
+        L.push(...wrapComment(`${n.title} is finer than the rows of your analysis table, so it has `
+          + `several rows per key and there is no single value to attach. Aggregate it first and `
+          + `choose the weight on purpose; the checks panel has the step.`, '*'));
+        L.push(`capture isid ${keys}`);
+        L.push('if _rc {');
+        L.push(`    di as error "${n.title.replace(/"/g, "'")} is finer than your unit of analysis: aggregate it to your level first, otherwise the merge multiplies your rows."`);
+        L.push('    exit 459');
+        L.push('}');
+      } else {
+        L.push(`isid ${keys}   // stops here if the key is not unique, which is what would multiply your rows`);
+      }
+    } else if (n.weightCol && !n.pickLargest && ps.length) {
+      /* Absichtlich mehrere Zeilen je Schluessel, also kein isid. Die Anteile muessen aber auf
+         eins aufgehen, sonst gewichtet der Verbund die Stichprobe still um. */
+      const geoK = ps.filter((q) => KEYS[q.l.type].family === 'geo').map((q) => leftCol(q));
+      const grp = (geoK.length ? geoK : [leftCol(ps[0])]).join(' ');
+      L.push('* Several rows per key on purpose, so no isid. The shares must still add to one:');
+      L.push(`bysort ${grp}: egen double _share_sum = total(${n.weightCol})`);
+      L.push('capture assert abs(_share_sum - 1) < 1e-6');
+      L.push('if _rc {');
+      L.push(`    di as error "The shares in ${n.weightCol} do not add up to one per unit: the merge would reweight your sample."`);
+      L.push('    exit 459');
+      L.push('}');
+      L.push('drop _share_sum');
     }
     L.push(`save "${v}.dta", replace`, '');
   });
 
+  const abgeleitetImMaster = new Set();
   const b = order[0];
   L.push(`* 1. ${b.title}  (${b.unit})`);
-  L.push(b.reader ? b.reader.stata : `use "${varName(b)}.dta", clear`, '');
+  L.push(b.reader ? b.reader.stata
+    : `import delimited "${varName(b)}.csv", delimiter(";") varnames(1) stringcols(_all) encoding("UTF-8") clear`);
+  alsText(L, b);
+  if (!b.reader) {
+    b.keys.filter((k) => KEYS[k.type].family === 'time')
+      .forEach((k) => L.push(`destring ${k.name}, replace   // the year is a number on both sides`));
+  }
+  L.push('');
 
   steps.forEach((st, i) => {
     const ps = pairsFor(st);
     if (!ps.length) return;
     const R = nodeById(st.right);
     const v = varName(R);
-    const keys = ps.map((q) => leftCol(q)).join(' ');
+    const psJ = st.time === 'spread' ? ps.filter((q) => KEYS[q.l.type].family !== 'time') : ps;
+    const keys = psJ.map((q) => leftCol(q)).join(' ');
     const keep = st.join === 'inner' ? 'keep(match)' : 'keep(master match)';
+    /* Liegt der feinere Schlüssel im Master, entsteht die gröbere Spalte hier, vor dem merge.
+       Sie wurde vorher nirgends angelegt, und Stata bricht mit r(111) ab. */
+    ps.forEach((q) => {
+      const l = leftCol(q);
+      if (!l.endsWith('_derived') || abgeleitetImMaster.has(l)) return;
+      const d = KEYS[q.r.type].digits || 5;
+      abgeleitetImMaster.add(l);
+      L.push(`capture drop ${l}`);
+      L.push(`gen str${d} ${l} = substr(${q.l.name}, 1, ${d})   // ${KEYS[q.r.type].label.toLowerCase()} from ${KEYS[q.l.type].label.toLowerCase()}`);
+    });
+    /* Dieselbe Bremse wie im R-Skript: zwei Gliederungen, die sich nur überlappen, haben
+       keinen gemeinsamen Schlüssel, und ein merge auf ihnen spielt dort etwas zu, wo die
+       Ziffern zufällig gleich sind. Ohne diese Zeilen hielt nur die R-Fassung an und die
+       Stata-Fassung nicht, und das ist der schlechtere Fehler von beiden. */
+    if (!R.weightCol) {
+      const schlimm = ps.find((q) => (q.mode === 'weighted' || q.mode === 'spatial')
+                                     && KEYS[q.l.type].family === 'geo');
+      if (schlimm) {
+        const la = KEYS[schlimm.l.type].label, lb = KEYS[schlimm.r.type].label;
+        L.push(...wrapComment(`${la} and ${lb} do not nest into one another, so the two columns `
+          + `are not the same key. Merging them directly attaches a value wherever the codes `
+          + `happen to coincide, which is a different area. Put the bridge in (the checks panel `
+          + `has the step), or delete the two lines below and say in the write-up what you did.`, '*'));
+        L.push(`di as error "${la} and ${lb} overlap rather than nest: merge them through a crosswalk, not directly."`);
+        L.push('exit 459', '');
+      }
+    }
     L.push(`* attach ${R.title}`);
+    if (st.time === 'spread') L.push(`* one reference date, carried across every year: the year is not a merge key`);
     if (R.weightCol && !R.pickLargest) {
       L.push(`* This table has several rows per key on purpose, so m:1 would refuse. joinby keeps`);
       L.push(`* every overlap, which means your rows are multiplied and have to be collapsed after.`);
@@ -1641,6 +2355,51 @@ function genStata() {
     L.push(`label variable _merge${i + 1} "1 = no regional value for this row, 3 = matched"`);
     L.push(`tab _merge${i + 1}`, '');
   });
+  const wtS = order.find((n) => n.weightCol && !n.pickLargest);
+  if (wtS) {
+    const sw = order[0].surveyWeight;
+    L.push('* joinby multiplied your rows: a case in two areas is now two rows.');
+    if (sw) {
+      L.push(`* Split the survey weight along the same shares, otherwise the case counts twice`);
+      L.push(`* and the weighted totals grow out of nothing.`);
+      L.push(`gen double ${sw}_split = ${sw} * ${wtS.weightCol}`);
+      L.push(`* Use ${sw}_split wherever you would have used ${sw}.`);
+    } else {
+      L.push(`* If your analysis table carries a survey weight, multiply it by ${wtS.weightCol}`);
+      L.push(`* here. Name the weight on the analysis block to have this written for you.`);
+    }
+    L.push('');
+  }
+  if (measures.length) {
+    L.push('* ' + '-'.repeat(72));
+    L.push('* Spatial measures. Stata has no spatial join, so these columns are built in R and');
+    L.push('* merged back on the case id. That is one round trip, and it is the whole of it:');
+    L.push('*');
+    L.push('*   1. Open the R tab, save it as measures.R and run it once. It writes one column');
+    L.push('*      per measure onto your cases, and fetches any OpenStreetMap layer it needs.');
+    L.push('*   2. At the end of that R script, write the result out for Stata:');
+    L.push('*        haven::write_dta(dat[, c("' + (firstCaseName(order) || 'caseid') + '", ' +
+           measures.map((n) => '"' + measureParams(n).out + '"').join(', ') + ')],');
+    L.push('*                         "spatial_measures.dta")');
+    L.push('*   3. Then continue here:');
+    L.push('*        merge 1:1 ' + (firstCaseName(order) || 'caseid') + ' using "spatial_measures.dta"');
+    L.push('*        assert _merge == 3');
+    L.push('*        drop _merge');
+    L.push('*');
+    L.push('* Everything below names what each column is, so the do-file still documents it.');
+    L.push('* ' + '-'.repeat(72));
+    measures.forEach((n) => {
+      const m = MEASURES[n.measure], q = measureParams(n);
+      L.push(`* ${n.title}: ${q.out}`);
+      if (q.overpass) {
+        L.push(`* The target layer is ${q.target} (OpenStreetMap, ${q.osmTag}). Stata cannot fetch it:`);
+        L.push('* run the R tab once, which downloads it and writes ' + q.targetFile + ', then convert');
+        L.push('* that file to .dta in R or QGIS. The R tab also records the download date.');
+      }
+      m.stata(q).forEach((line) => L.push(line));
+      L.push('');
+    });
+  }
   L.push('* What did not match is never random, so look at it before you drop it:');
   L.push(`* tab ${firstGeoName(order)} if _merge1 == 1, sort`);
   return L.join('\n');
@@ -1653,6 +2412,55 @@ function leftCol(p) {
 function rightCol(p) {
   if (p.mode === 'derive' && p.op === 'truncate' && KEYS[p.r.type].rank > KEYS[p.l.type].rank) return p.l.name + '_derived';
   return p.r.name;
+}
+/* Welches Maß ein Block misst, entschieden mit der Regel des Merkmalsregisters und nicht mit
+   einer Ähnlichkeit: dieselbe Regel, die dort über die Zugehörigkeit entscheidet, reist im
+   Katalog mit. Das ist der Weg von "ich habe eine Arbeitslosenquote angehängt" zu "es gibt 64
+   davon und sie teilen durch 43 verschiedene Nenner, hast du die richtige?". */
+function registerBegriff(label) {
+  const liste = (S.cat && S.cat.register) || [];
+  const t = String(label || '').toLowerCase();
+  if (!t) return null;
+  for (const b of liste) {
+    try {
+      if (b.not && new RegExp(b.not, 'i').test(t)) continue;
+      if (b.rule && new RegExp(b.rule, 'i').test(t)) return b;
+    } catch (e) { /* eine kaputte Regel darf die Oberfläche nicht mitnehmen */ }
+  }
+  return null;
+}
+
+/* Die Fassungen selbst stehen nicht im Katalog: 496 davon mit allen Feldern waeren ein halbes
+   Megabyte fuer etwas, das die meisten nie brauchen. Sie werden geholt, sobald ein Block ein Mass
+   traegt, das das Register kennt, und danach behalten. Gleiche Herkunft, also kein CORS. */
+let registerDaten = null, registerLaeuft = null;
+function registerLaden() {
+  if (registerDaten) return Promise.resolve(registerDaten);
+  if (registerLaeuft) return registerLaeuft;
+  registerLaeuft = fetch(REGISTER_SITE + 'register.json')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => { registerDaten = d; return d; })
+    .catch(() => null);
+  return registerLaeuft;
+}
+
+/* Welche Fassung auf einem Block liegt, sobald das Register da ist. Das Ergebnis haengt am
+   Knoten, damit der Erzeuger es ohne erneute Suche findet. */
+function fassungFuer(n) {
+  if (!registerDaten || !n || n.kind !== 'regional') return null;
+  const bg = registerBegriff(n.pick ? n.pick.label : n.title);
+  if (!bg) return null;
+  const voll = (registerDaten.begriffe || []).find((b) => b.id === bg.id);
+  if (!voll) return null;
+  return fassungFinden(voll, n.pick ? n.pick.label : n.title,
+                       n.sourceKey || (n.pick && n.pick.sourceKey) || '');
+}
+
+/* Die Fallkennung der Analysetabelle: der Schluessel, auf dem die in R gerechneten Spalten
+   wieder an die Stata-Daten kommen. */
+function firstCaseName(order) {
+  for (const n of order) for (const k of n.keys) if (KEYS[k.type].family === 'unit') return k.name;
+  return null;
 }
 function firstGeoName(order) {
   for (const n of order) for (const k of n.keys) if (KEYS[k.type].family === 'geo') return k.name;
@@ -1738,27 +2546,53 @@ function checksPanel() {
     `<div><b>${n.err}</b> blocking</div><div><b>${n.warn}</b> to decide</div>` +
     `<div><b>${n.info}</b> to know</div><div><b>${n.ok}</b> fine</div>`));
   const marks = { err: '×', warn: '!', info: 'i', ok: '✓' };
-  S.checks.forEach((c) => {
+
+  const knopf = (c) => {
+    if (!c.action) return null;
+    /* Ein Knopf, der etwas ändert, sieht anders aus als einer, der nur hinführt: das eine
+       darf man blind drücken, das andere ist eine Entscheidung, die beim Leser bleibt. */
+    const zeigt = /^show|^open/.test(c.action.do || '');
+    const schon = !zeigt && S.getan && S.getan[aktionsSchluessel(c.action)];
+    const b = el('button', 'btn ' + (zeigt ? 'ghost' : schon ? 'ghost done' : 'primary'),
+                 esc(schon ? 'Done \u2713  ' + c.action.label : c.action.label));
+    b.title = zeigt ? 'Takes you to the place where you decide this'
+                    : schon ? 'Already applied. Press again if you undid it.'
+                            : 'Applies this to the canvas and to the generated code';
+    b.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); applyAction(c.action); });
+    return b;
+  };
+
+  const zeile = (c) => {
     const d = el('details', 'check ' + c.level);
-    d.open = c.level === 'err';
+    /* Aufgeklappt ist, was etwas zu entscheiden gibt. Zugeklappt war vorher ALLES, und damit
+       lag jeder Abhilfeknopf hinter einer Klappe: neun Prüfungen, neun unsichtbare Knöpfe.
+       Wer nichts sieht, drückt nichts und hält das Werkzeug für stumm. */
+    const aendert = c.action && !/^show|^open/.test(c.action.do || '');
+    d.open = c.level === 'err' || (c.level === 'warn' && aendert);
     d.innerHTML =
       `<summary><span class="mark">${marks[c.level]}</span><span><span class="h">${c.title}</span>` +
       (c.where ? `<span class="where">${esc(c.where)}</span>` : '') + '</span></summary>' +
       `<div class="body">${c.body}</div>` +
       (c.fix ? `<div class="fix"><b>What to do.</b> ${c.fix}</div>` : '');
-    if (c.action) {
-      /* Ein Knopf, der etwas ändert, sieht anders aus als einer, der nur hinführt: das eine
-         darf man blind drücken, das andere ist eine Entscheidung, die beim Leser bleibt. */
-      const zeigt = /^show|^open/.test(c.action.do || '');
-      const b = el('button', 'btn ' + (zeigt ? 'ghost' : 'primary'), esc(c.action.label));
-      b.style.cssText = 'margin:.5rem 0 0 1.6rem';
-      b.title = zeigt ? 'Takes you to the place where you decide this'
-                      : 'Applies this to the canvas and to the generated code';
-      b.addEventListener('click', (ev) => { ev.preventDefault(); applyAction(c.action); });
-      d.appendChild(b);
-    }
-    wrap.appendChild(d);
-  });
+    const b = knopf(c);
+    if (b) { b.style.cssText = 'margin:.5rem 0 0 1.6rem'; d.appendChild(b); }
+    return d;
+  };
+
+  /* Erst das, was blockiert oder entschieden werden will. Das Hintergrundwissen steht darunter
+     hinter seiner eigenen Zahl, sonst liest eine saubere Arbeitsfläche sich wie neun Mängel. */
+  const vorn = S.checks.filter((c) => c.level === 'err' || c.level === 'warn');
+  const hinten = S.checks.filter((c) => c.level === 'info' || c.level === 'ok');
+  vorn.forEach((c) => wrap.appendChild(zeile(c)));
+  if (hinten.length) {
+    const box = el('details', 'check-group');
+    box.innerHTML = `<summary><span class="h">${hinten.length} more, for background</span>` +
+      `<span class="where">nothing here blocks you</span></summary>`;
+    const inner = el('div', '');
+    hinten.forEach((c) => inner.appendChild(zeile(c)));
+    box.appendChild(inner);
+    wrap.appendChild(box);
+  }
   return wrap;
 }
 
@@ -1851,7 +2685,8 @@ function inspector() {
     const t = el('select');
     t.innerHTML = `<option value="exact">Same year on both sides</option>` +
                   `<option value="lag1">Previous year (interview in year t, context at 31 Dec t−1)</option>` +
-                  `<option value="nearest">Nearest year that exists</option>`;
+                  `<option value="nearest">Nearest year that exists</option>` +
+                  `<option value="spread">One reference date, carried across every year</option>`;
     t.value = e.time;
     t.addEventListener('change', () => { e.time = t.value; render(); });
     d.appendChild(t);
@@ -1884,6 +2719,80 @@ function inspector() {
     });
     d.appendChild(row);
     d.appendChild(el('p', 'hint', 'This is what the year checks compare the sources against.'));
+
+    /* Ohne den Namen des Hochrechnungsgewichts kann das Skript es beim gewichteten Zuspielen
+       nicht mitteilen, und genau dort blaeht eine Aufteilung die Stichprobe still auf. */
+    d.appendChild(el('label', '', 'Survey weight column'));
+    const wIn = el('input'); wIn.type = 'text'; wIn.placeholder = 'phrf, hhrf, or leave empty';
+    wIn.value = n.surveyWeight || '';
+    wIn.addEventListener('change', () => { n.surveyWeight = wIn.value.trim(); render(); });
+    d.appendChild(wIn);
+    d.appendChild(el('p', 'hint',
+      'Only needed when a weighted allocation splits a case across several areas. The weight then has to be split along the same shares, otherwise one case counts several times and the weighted totals grow out of nothing.'));
+  }
+
+  /* Ein raeumliches Mass hat keine Schluessel zu waehlen, sondern Parameter, und die Parameter
+     SIND die Entscheidung: 500 m und 5 km sind zwei verschiedene Variablen. */
+  if (n.kind === 'measure' && MEASURES[n.measure]) {
+    const m = MEASURES[n.measure];
+    n.params = n.params || {};
+    d.appendChild(el('p', 'hint', m.blurb));
+    m.params.forEach((key) => {
+      const spec = MEASURE_PARAMS[key];
+      d.appendChild(el('label', '', spec.label));
+
+      /* Die Zielebene ist der einzige Parameter, zu dem der Katalog etwas zu sagen hat: 26
+         OSM-Punktebenen, jede mit Tag, Abfrage und Objektzahl. Wer eine davon nimmt, bekommt
+         ein Skript, das sie sich selbst holt. Das Textfeld bleibt daneben stehen, denn eine
+         eigene Ebene ist der haeufigere Fall und darf nicht schwerer werden. */
+      if (spec.kind === 'target') {
+        const sel = el('select');
+        const ziele = S.cat.targets || [];
+        const leer = el('option', '', ziele.length ? 'My own layer (name it below)' : 'My own layer');
+        leer.value = ''; sel.appendChild(leer);
+        ziele.forEach((z) => {
+          const o = el('option', '', `${z.label}${z.n ? '  (' + z.n.toLocaleString('de-DE') + ')' : ''}`);
+          o.value = z.id; sel.appendChild(o);
+        });
+        sel.value = n.params.targetId || '';
+        sel.addEventListener('change', () => {
+          n.params.targetId = sel.value || undefined;
+          if (sel.value) n.params.target = undefined;   // der Name kommt dann aus dem Katalog
+          render();
+        });
+        d.appendChild(sel);
+        const z = ziele.find((x) => x.id === n.params.targetId);
+        if (z) {
+          d.appendChild(el('p', 'hint',
+            `${z.tag} \u00b7 ${z.n ? z.n.toLocaleString('de-DE') + ' objects' : 'count unknown'}` +
+            `${z.asOf ? ' (taginfo, ' + z.asOf + ')' : ''}. The script fetches this from Overpass once, ` +
+            'keeps the file and records the download date. OpenStreetMap is uneven: it is thinnest ' +
+            'in rural areas, which is exactly where a distance to the nearest one carries the most ' +
+            'weight. Say in the paper when you downloaded it.'));
+          const a = el('a', 'hint', 'What this tag means on the OSM wiki');
+          a.href = z.url; a.target = '_blank'; a.rel = 'noopener';
+          d.appendChild(a);
+          return;                      // dann braucht es kein Textfeld daneben
+        }
+      }
+
+      const i = el('input');
+      i.type = spec.kind === 'number' ? 'number' : 'text';
+      if (spec.kind === 'number') { i.min = String(spec.min); i.max = String(spec.max); }
+      if (key === 'out') i.placeholder = measureParams(n).out;
+      i.value = n.params[key] === undefined ? '' : n.params[key];
+      i.addEventListener('change', () => {
+        const raw = i.value.trim();
+        if (spec.kind === 'number') {
+          const v = parseInt(raw, 10);
+          n.params[key] = isNaN(v) ? spec.def : Math.min(spec.max, Math.max(spec.min, v));
+          i.value = n.params[key];
+        } else { n.params[key] = raw; }
+        render();
+      });
+      d.appendChild(i);
+    });
+    d.appendChild(el('p', 'hint', m.decision));
   }
 
   if (n.kind !== 'base') {
@@ -1922,7 +2831,7 @@ function inspector() {
       sel.value = k.type;
       sel.addEventListener('change', () => { k.type = sel.value; render(); });
       const x = el('button', '', '×'); x.title = 'Remove this column';
-      x.addEventListener('click', () => { n.keys.splice(i, 1); render(); });
+      x.addEventListener('click', () => { removeKey(n, k.id); render(); });
       row.appendChild(nameI); row.appendChild(sel); row.appendChild(x);
       list.appendChild(row);
     });
@@ -1940,12 +2849,39 @@ function inspector() {
   } else if (n.url) {
     d.appendChild(el('p', 'hint', `<a href="${esc(n.url)}" target="_blank" rel="noopener">Open the source →</a>`));
   }
+
+  /* Eine Brücke nennt bisher in Prosa, welche Datei man braucht. Die Adresse, an der sie
+     liegt, stand nirgends, und genau daran bleibt man hängen: das Werkzeug sagt "du brauchst
+     eine Zuordnungstabelle" und lässt einen suchen. */
+  const q = n.tplId && TEMPLATES.find((t) => t.id === n.tplId);
+  const bez = (q && q.quelle) || (n.quelle || null);
+  if (bez) {
+    const a = el('p', 'hint');
+    a.innerHTML = `<a href="${esc(bez.url)}" target="_blank" rel="noopener">${esc(bez.label)} \u2192</a>` +
+                  (bez.warn ? `<br><span class="warnhinweis">${esc(bez.warn)}</span>` : '');
+    d.appendChild(a);
+  }
   /* Der Weg zurück in den Finder: dort steht, was der Datensatz enthält, welche Jahre und
      Ebenen er wirklich führt und was daneben noch in Frage käme. Der Finder liest ?q=. */
   if (n.kind === 'regional') {
     d.appendChild(el('p', 'hint',
       `<a href="${esc(GEODB_SITE)}?q=${encodeURIComponent(n.pick ? n.pick.label : n.title)}"
           target="_blank" rel="noopener">Look this up in the GeoDB finder →</a>`));
+
+    /* Und der Schritt, der zwischen Finden und Rechnen fehlt: dieselbe Größe erscheint bei
+       mehreren Quellen mit verschiedenen Nennern, und zwei so gebaute Zahlen sind nicht
+       vergleichbar. Das Register stellt die Fassungen nebeneinander und sagt, was sie trennt.
+       Hier steht es, solange der Block eine Größe trägt, die das Register kennt. */
+    const bg = registerBegriff(n.pick ? n.pick.label : n.title);
+    if (bg) {
+      const warn = el('p', 'hint vergleich');
+      warn.innerHTML =
+        `<b>${bg.n} versions</b> of \u201c${esc(bg.de || bg.title)}\u201d exist across ` +
+        `${bg.sources} sources, and they do not all measure the same thing. ` +
+        `<a href="${esc(REGISTER_SITE)}?m=${encodeURIComponent(bg.id)}" target="_blank" rel="noopener">` +
+        `Compare them in the Measure Register \u2192</a>`;
+      d.appendChild(warn);
+    }
   }
   box.appendChild(d);
   return box;
@@ -2202,10 +3138,35 @@ function buildFromGuide() {
   let wantType = GUIDE.data === 'own' ? GUIDE.level : LEVEL_TO_KEY[GUIDE.level];
   if (wantType === 'coord') wantType = LEVEL_TO_KEY[reg.level] || 'ags5';
   const cands = anchor.keys.filter((k) => k.type === wantType);
-  const aKey = cands.find((k) => /rek/.test(k.name)) || cands[0] ||
-               anchor.keys.find((k) => KEYS[k.type].family === 'geo');
   const bKey = reg.keys.find((k) => k.type === wantType) ||
                reg.keys.find((k) => KEYS[k.type].family === 'geo');
+  /* Die Koordinatenspalte des räumlichen Schritts ist seine EINGABE: st_as_sf verbraucht sie
+     zur Geometrie, und st_drop_geometry wirft sie weg. In der erzeugten Tabelle steht sie
+     nicht mehr, also kann nichts auf ihr verbunden werden. */
+  const anchorRezept = !!(anchor.recipe && anchor.recipe.r);
+  const brauchbar = anchorRezept ? cands.filter((k) => k.type !== 'coord') : cands;
+  let aKey = brauchbar.find((k) => /rek/.test(k.name)) || brauchbar[0];
+  /* Ein Datensatz, der selbst nur aus Punkten besteht, hat keinen Schlüssel, auf den man
+     verbinden könnte. Ihn trotzdem anzuhängen hieße, sich eine Spalte auszudenken. Er bleibt
+     unverbunden, und die Prüfung sagt warum. */
+  if (bKey && bKey.type === 'coord' && anchorRezept) {
+    aKey = null;
+  } else if (!aKey && bKey) {
+    /* Gibt es den gewünschten Schlüssel nicht, wurde bisher einfach der erste Gebiets-
+       schlüssel genommen, den der Block hatte. Bei Koordinaten war das "lon_lat", und der
+       Bauplan verband eine Koordinate mit einem Regierungsbezirksschlüssel: eine Spalte, die
+       es in der erzeugten Tabelle gar nicht gibt, also brach das Skript ab. Stattdessen wird
+       der Schlüssel genommen, den die Wissensbasis überhaupt zulässt, und der einfachste
+       zuerst. Passt keiner, entsteht keine Kante und die Prüfung sagt, dass der Block
+       unverbunden ist. */
+    const rang = { direct: 0, derive: 1, crosswalk: 2, weighted: 3, spatial: 4 };
+    const moeglich = anchor.keys
+      .filter((k) => KEYS[k.type].family === 'geo')
+      .map((k) => ({ k, m: matchKeys(k.type, bKey.type) }))
+      .filter((x) => x.m.mode !== 'no')
+      .sort((x, y) => (rang[x.m.mode] ?? 9) - (rang[y.m.mode] ?? 9));
+    aKey = moeglich.length ? moeglich[0].k : null;
+  }
   if (aKey && bKey) addEdgeQuiet({ node: anchor.id, key: aKey.id }, { node: reg.id, key: bKey.id });
   const aY = anchor.keys.find((k) => KEYS[k.type].family === 'time');
   const bY = reg.keys.find((k) => KEYS[k.type].family === 'time');
@@ -2221,11 +3182,48 @@ function buildFromGuide() {
   toast('Canvas built. The checks on the right say what to watch out for.');
 }
 
+/* Bindet einen Block wieder an das an, was schon in der Kette hängt: dieselbe Wahl wie beim
+   Aufbau über die Führung, einfachster Weg zuerst. */
+function neuAnbinden(n) {
+  const { order } = chain();
+  const kandidaten = order.filter((k) => k.id !== n.id);
+  if (!kandidaten.length) return;
+  const rang = { direct: 0, derive: 1, crosswalk: 2, weighted: 3, spatial: 4 };
+  const nGeo = n.keys.filter((k) => KEYS[k.type].family === 'geo');
+  let bestes = null;
+  kandidaten.forEach((k, tiefe) => {
+    k.keys.filter((q) => KEYS[q.type].family === 'geo').forEach((kq) => {
+      nGeo.forEach((nq) => {
+        const m = matchKeys(kq.type, nq.type);
+        if (m.mode === 'no') return;
+        const punkte = (rang[m.mode] ?? 9) * 10 + tiefe;
+        if (!bestes || punkte < bestes.punkte) bestes = { punkte, von: k, vk: kq, nk: nq };
+      });
+    });
+  });
+  if (!bestes) return;
+  addEdgeQuiet({ node: bestes.von.id, key: bestes.vk.id }, { node: n.id, key: bestes.nk.id });
+  const aY = bestes.von.keys.find((k) => KEYS[k.type].family === 'time');
+  const bY = n.keys.find((k) => KEYS[k.type].family === 'time');
+  if (aY && bY) addEdgeQuiet({ node: bestes.von.id, key: aY.id }, { node: n.id, key: bY.id });
+}
+
 /* ------------------------------------------------------------------ Abhilfen */
 /* Eine Prüfung, die nur sagt, was falsch ist, verlangt vom Leser genau das Wissen, das ihm
    fehlt. Wo die Abhilfe eindeutig ist, führt die Prüfung sie auf Knopfdruck aus, und der
    erzeugte Code ändert sich mit. */
+function aktionsSchluessel(a) {
+  return [a.do, a.node || '', a.edge || '', a.level || '', a.from || '', a.to || '',
+          a.aNode || '', a.bNode || ''].join('|');
+}
+
 function applyAction(a) {
+  /* Alles, was die Arbeitsflaeche aendert, ist ab hier zuruecknehmbar, und es hinterlaesst
+     eine Spur in S.getan, damit die Pruefung hinterher etwas anderes sagen kann als vorher.
+     Ohne diese Spur sah eine angewandte Abhilfe genauso aus wie eine ungedrueckte, und der
+     naheliegende Schluss war, der Knopf sei kaputt. */
+  const aendert = !/^show|^open/.test(a.do || '');
+  if (aendert) { standSichern(); S.getan = S.getan || {}; S.getan[aktionsSchluessel(a)] = Date.now(); }
   const n = a.node ? nodeById(a.node) : null;
   /* Zeigende Aktionen ändern nichts, sie führen nur hin. Sie kehren früh zurück, weil ein
      render() die Hervorhebung sofort wieder wegwischen würde. */
@@ -2243,7 +3241,7 @@ function applyAction(a) {
       return;
     case 'years': {
       S.years = { from: a.from, to: a.to };
-      toast(`Analysis period set to ${a.from}–${a.to}.`);
+      getanHinweis(`Analysis period set to ${a.from}–${a.to}.`);
       break;
     }
     case 'time': {
@@ -2251,8 +3249,10 @@ function applyAction(a) {
         const e = S.edges.find((x) => x.id === id);
         if (e) e.time = a.mode;
       });
-      toast(a.mode === 'nearest' ? 'The link now takes the nearest available year.'
-                                 : 'The link now takes the previous year.');
+      getanHinweis(a.mode === 'nearest' ? 'The link now takes the nearest available year.'
+          : a.mode === 'spread' ? 'The one reference date is now carried across every year.'
+          : a.mode === 'exact' ? 'The link now matches the year exactly.'
+                               : 'The link now takes the previous year.');
       break;
     }
     case 'rek': {
@@ -2266,24 +3266,31 @@ function applyAction(a) {
       if (paar.from === a.oldKey) paar.from = neu.id; else paar.to = neu.id;
       if (e.from.key === a.oldKey) e.from.key = neu.id;
       if (e.to.key === a.oldKey) e.to.key = neu.id;
-      toast(`Now matching on ${neu.name}, one boundary vintage on both sides.`);
+      getanHinweis(`Now matching on ${neu.name}, one boundary vintage on both sides.`);
       break;
     }
     case 'aggregate':
       if (!n) return;
       n.aggregate = true;
-      toast('An aggregation step is now in the script. Set the weight column in it.');
+      getanHinweis('An aggregation step is now in the script. Set the weight column in it.');
       break;
     case 'largest':
       if (!n) return;
       n.pickLargest = true;
-      toast('The script now keeps the largest share per unit, so your rows are not multiplied.');
+      getanHinweis('The script now keeps the largest share per unit, so your rows are not multiplied.');
       break;
-    case 'level':
+    case 'level': {
       if (!n) return;
       setLevel(n, a.level);
-      toast(`Switched to ${(LEVEL_LABEL[a.level] || a.level).toLowerCase()}.`);
+      /* setLevel wirft die alten Schlüssel weg und mit ihnen die Kanten, die daran hingen.
+         Ohne das Wiederanbinden stand der Block danach unverbunden da und das Skript
+         verknüpfte gar nichts mehr: aus einer angebotenen Abhilfe wurde ein leerer Bauplan.
+         Angebunden wird an den Block, der schon in der Kette hängt, und zwar über das Paar,
+         das die Wissensbasis zulässt; ist es eine Überlappung, sagt das die Prüfung danach. */
+      neuAnbinden(n);
+      getanHinweis(`Switched to ${(LEVEL_LABEL[a.level] || a.level).toLowerCase()}.`);
       break;
+    }
     case 'addRegionl': {
       const soep = nodeById(a.node);
       if (!soep) return;
@@ -2293,9 +3300,21 @@ function applyAction(a) {
       const bh = br.keys.find((k) => k.type === 'hid'), by = br.keys.find((k) => KEYS[k.type].family === 'time');
       if (h && bh) addEdgeQuiet({ node: soep.id, key: h.id }, { node: br.id, key: bh.id });
       if (y && by) addEdgeQuiet({ node: soep.id, key: y.id }, { node: br.id, key: by.id });
+      /* Die Regionaldatei bringt den Gebietsschlüssel, den das SOEP nicht hat. Regionalblöcke,
+         die vorher nur am Jahr hingen, weil es nichts anderes gab, werden jetzt daran
+         angebunden: sonst bleibt im Skript ein Verbund allein auf syear stehen, der jede
+         Zeile mit jeder Zeile desselben Jahres zusammenbringt. */
+      S.nodes.filter((n) => n.kind === 'regional' && n.id !== br.id).forEach((n) => {
+        const hatGeo = S.edges.some((e) => (e.from.node === n.id || e.to.node === n.id)
+          && e.pairs.some((q) => {
+            const a2 = keyOf(nodeById(e.from.node), q.from), b2 = keyOf(nodeById(e.to.node), q.to);
+            return a2 && b2 && KEYS[a2.type].family === 'geo' && KEYS[b2.type].family === 'geo';
+          }));
+        if (!hatGeo) neuAnbinden(n);
+      });
       ensureVisible(br);
       S.sel = { kind: 'node', id: br.id };
-      toast('SOEPregion added and linked on hid and syear.');
+      getanHinweis('SOEPregion added and linked on hid and syear.');
       break;
     }
     case 'asBase': {
@@ -2307,12 +3326,42 @@ function applyAction(a) {
       if (n.origKind == null) n.origKind = n.kind;
       n.kind = 'base';
       S.sel = { kind: 'node', id: n.id };
-      toast(`“${n.title}” is now the analysis table. Its rows are the rows of the result.`);
+      getanHinweis(`“${n.title}” is now the analysis table. Its rows are the rows of the result.`);
+      break;
+    }
+    /* Die Umstell-Tabelle wirklich dazwischenhaengen: der alte Code der Analyseseite geht auf
+       ags_old, ags_2023 geht auf die Regionalseite, und die direkte Kante zwischen beiden faellt
+       weg. Ohne den letzten Schritt liefe der alte Weg daneben weiter und die Umstellung waere
+       Zierde. */
+    case 'routeXwalk': {
+      const x = nodeById(a.node);
+      const um = x && umstellSpalten(x);
+      if (!um) return;
+      const b = baseNode();
+      if (!b) { getanHinweis('Say which table you are analysing first.'); break; }
+      const art = um.alt.type;
+      const linkeSeite = b.keys.find((k) => k.type === art);
+      const rechts = S.nodes.find((o) => o.id !== x.id && o.id !== b.id && o.kind === 'regional' &&
+                                         o.keys.some((k) => k.type === art));
+      const rechteSeite = rechts && rechts.keys.find((k) => k.type === art);
+      if (!linkeSeite || !rechteSeite) {
+        getanHinweis('Nothing to route: both sides need a district code.');
+        break;
+      }
+      /* Die direkte Kante zwischen den beiden Seiten muss weg, sonst bleibt der alte Weg offen. */
+      S.edges = S.edges.filter((e) => {
+        const paar = (e.from.node === b.id && e.to.node === rechts.id) ||
+                     (e.from.node === rechts.id && e.to.node === b.id);
+        return !paar;
+      });
+      addEdgeQuiet({ node: b.id, key: linkeSeite.id }, { node: x.id, key: um.alt.id });
+      addEdgeQuiet({ node: x.id, key: um.neu.id }, { node: rechts.id, key: rechteSeite.id });
+      getanHinweis('Routed: the old code goes in, the current one comes out.');
       break;
     }
     case 'pair': {
       addEdgeQuiet({ node: a.aNode, key: a.aKey }, { node: a.bNode, key: a.bKey });
-      toast('Linked.');
+      getanHinweis('Linked.');
       break;
     }
     default:
@@ -2320,6 +3369,9 @@ function applyAction(a) {
   }
   render();
 }
+
+/* Ein gemeinsamer Hinweis mit Ruecknahme, damit nicht jeder Verb seinen eigenen bauen muss. */
+function getanHinweis(text) { toast(text, standZurueck); }
 
 function blinken(node, dauer = 2400) {
   if (!node) return;
@@ -2486,6 +3538,97 @@ function openHelp() {
 }
 
 /* ------------------------------------------------------------------ Beispiel */
+/* Was beim ersten Öffnen dasteht. Es war die SOEP-Kette, und die führt mit dem Teil an, der am
+   wenigsten mit Geodaten zu tun hat: zwei Umfragedateien, von denen eine "RESTRICTED, APPLY FOR
+   ACCESS" trägt. Wer wissen will, wofür das Werkzeug da ist, sieht dann als Erstes eine Hürde
+   und einen Verwaltungsschlüssel.
+
+   Die Vorgabe fängt jetzt bei Koordinaten an, weil das die Frage ist, für die es keinen Ersatz
+   gibt: ich habe Adressen und will wissen, in welcher Gemeinde, welchem Kreis und welcher
+   Rasterzelle sie liegen, und was dort gilt. Die Punkt-in-Fläche-Brücke steht dabei als eigener
+   Block, weil sie drei Entscheidungen enthält (Gebietsstand, Koordinatensystem, was mit einem
+   Punkt geschieht, der in keiner Fläche liegt) und keine davon nebenbei getroffen werden darf.
+   Die SOEP-Kette bleibt als Knopf, denn für den RegioHub ist sie der häufigste Fall. */
+function loadExampleGeo() {
+  S.nodes = []; S.edges = []; S.sel = null;
+  S.years = { from: 2016, to: 2023 };
+
+  const b = nodeFromTemplate(TEMPLATES.find((t) => t.id === 'own'), 40, 70);
+  b.title = 'Your own table, with coordinates';
+  b.subtitle = 'one row per case, with a location';
+  b.keys = [{ id: nid('k'), type: 'caseid', name: 'id', note: '', rec: false },
+            { id: nid('k'), type: 'year', name: 'year', note: '', rec: false },
+            { id: nid('k'), type: 'coord', name: 'lon_lat', note: '', rec: false }];
+  S.nodes.push(b);
+
+  const g = nodeFromTemplate(TEMPLATES.find((t) => t.id === 'geocode'), 350, 40);
+  S.nodes.push(g);
+  addEdgeQuiet({ node: b.id, key: b.keys[2].id },
+               { node: g.id, key: g.keys.find((k) => k.type === 'coord').id });
+
+  /* Einwohner je km² aus der INKAR-Siedlungsstruktur: die Kontextgröße, die am häufigsten an
+     Fälle gespielt wird, auf Kreisebene und ohne Zugangshürde. Der Katalog kann sich ändern,
+     also wird der Eintrag gesucht und nicht über einen Index festgenagelt. */
+  const i = S.cat.items.findIndex((it) => {
+    const p = S.cat.products[it[1]];
+    return p && p.key === 'inkar' && /Siedlungsstruktur/.test(p.name) && it[0].trim() === 'Einwohner je km²';
+  });
+  const wahl = i >= 0 ? itemAsPick(i) : {
+    label: 'Einwohner je km²', levels: ['district'], y0: 1996, y1: 2023,
+    sourceKey: 'inkar', sourceLabel: 'INKAR (BBSR)', url: 'https://www.inkar.de/', note: '', keyHint: ''
+  };
+  const reg = nodeFromPick(wahl, 690, 90);
+  if (reg.levels.includes('district')) setLevel(reg, 'district');
+  S.nodes.push(reg);
+  const krs = g.keys.find((k) => k.type === 'ags5');
+  const regGeo = reg.keys.find((k) => k.type === 'ags5') ||
+                 reg.keys.find((k) => KEYS[k.type].family === 'geo');
+  if (krs && regGeo) addEdgeQuiet({ node: g.id, key: krs.id }, { node: reg.id, key: regGeo.id });
+
+  /* Das Jahr gehört mit in die Verbindung. Eine Tabelle mit einer Zeile je Kreis UND Jahr, nur
+     auf dem Kreis verbunden, gibt jeder Zeile so viele Treffer, wie die Tabelle Jahre hat. Ein
+     Beispiel, das mit diesem Fehler dasteht, bringt ihn genau den Leuten bei, die hier sind,
+     um ihn zu vermeiden. */
+  const bJahr = b.keys.find((k) => KEYS[k.type].family === 'time');
+  const rJahr = reg.keys.find((k) => KEYS[k.type].family === 'time');
+  if (bJahr && rJahr) addEdgeQuiet({ node: b.id, key: bJahr.id }, { node: reg.id, key: rJahr.id });
+
+  save(); render();
+  /* Einpassen statt feste Koordinaten: die Panelbreiten sind einstellbar und gemerkt,
+     also steht ein Block sonst bei dem einen halb außerhalb und beim anderen mittig. */
+  fitView();
+}
+
+/* Zwei Beispiele, weil das Werkzeug zwei Dinge kann und das zweite bisher niemand fand.
+   Das Verbundbeispiel zeigt, wie eine Tabelle an Umfragedaten kommt; das raeumliche zeigt den
+   anderen Weg, bei dem gar keine Tabelle angespielt wird, sondern eine Spalte entsteht. */
+function loadExampleSpatial() {
+  S.nodes = []; S.edges = []; S.sel = null;
+  S.years = { from: 2010, to: 2022 };
+  const b = nodeFromTemplate(TEMPLATES.find((t) => t.id === 'own'), 60, 70);
+  b.title = 'Your own table, with coordinates';
+  b.keys = [{ id: nid('k'), type: 'caseid', name: 'id', note: '', rec: false },
+            { id: nid('k'), type: 'year', name: 'year', note: '', rec: false },
+            { id: nid('k'), type: 'coord', name: 'lon_lat', note: '', rec: false }];
+  S.nodes.push(b);
+  const machen = (id, ziel, x, y, extra) => {
+    const n = nodeFromTemplate(TEMPLATES.find((t) => t.id === id), x, y);
+    n.params = Object.assign({ targetId: ziel }, extra || {});
+    S.nodes.push(n);
+    const k = n.keys.find((q) => q.type === 'coord');
+    if (k) addEdgeQuiet({ node: b.id, key: b.keys[2].id }, { node: n.id, key: k.id });
+    return n;
+  };
+  machen('measure_dist_nearest', 'osm:pharmacy', 430, 30);
+  machen('measure_count_radius', 'osm:kindergarten', 430, 210, { radius: 1000 });
+  S.sel = null;
+  save(); render();
+  /* Einpassen statt feste Koordinaten: die Panelbreiten sind einstellbar und gemerkt,
+     also steht ein Block sonst bei dem einen halb außerhalb und beim anderen mittig. */
+  fitView();
+  toast('A spatial example: two columns, no table attached.');
+}
+
 function loadExample(pick) {
   S.nodes = []; S.edges = []; S.sel = null;
   S.years = { from: 2010, to: 2022 };
@@ -2614,7 +3757,11 @@ function wireUp() {
   $('#btn-guide').addEventListener('click', openGuide);
   /* Nicht `loadExample` direkt: der Zuhörer reicht das Klickereignis als ersten Parameter
      weiter, und seit loadExample einen Treffer entgegennimmt, kam dort das Ereignis an. */
-  $('#btn-example').addEventListener('click', () => loadExample());
+  const sx = $('#sel-example');
+  if (sx) sx.addEventListener('change', () => {
+    ({ geo: loadExampleGeo, soep: loadExample, spatial: loadExampleSpatial }[sx.value] || (() => {}))();
+    sx.value = '';          // die Liste ist ein Knopf, kein Zustand
+  });
   $('#btn-reset').addEventListener('click', () => {
     S.nodes = []; S.edges = []; S.sel = null; S.tab = 'checks'; render();
   });
@@ -2814,6 +3961,6 @@ async function vonAussenUebernehmen(sitzungWar) {
   wireUp();
   renderPalette();
   const sitzungWar = restore();
-  if (!sitzungWar) loadExample(); else render();
+  if (!sitzungWar) loadExampleGeo(); else render();
   vonAussenUebernehmen(sitzungWar);
 })();

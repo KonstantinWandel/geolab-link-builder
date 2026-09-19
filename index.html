@@ -42,7 +42,15 @@
       <span>Plan a linkage to German regional data, and get the code</span>
     </div>
     <button class="btn primary" id="btn-guide">Guide me</button>
-    <button class="btn" id="btn-example">Load an example</button>
+    <!-- Drei Beispiele als drei Knöpfe füllten die Kopfzeile und drängten "Guide me" an den
+         Rand. Als Liste bleibt sichtbar, dass es mehrere gibt, ohne dass sie um Platz
+         konkurrieren. -->
+    <select class="btn" id="sel-example" aria-label="Load an example">
+      <option value="">Load an example…</option>
+      <option value="geo">Coordinates to context</option>
+      <option value="soep">SOEP and a regional table</option>
+      <option value="spatial">Measure a distance</option>
+    </select>
     <button class="btn ghost" id="btn-reset">Clear</button>
     <div class="spacer"></div>
     <button class="btn ghost" id="btn-help">What is this?</button>
@@ -105,7 +113,8 @@
   </div>
 </div>
 
-<script src="knowledge.js"></script>
+<script src="verdict.js"></script>
+    <script src="knowledge.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

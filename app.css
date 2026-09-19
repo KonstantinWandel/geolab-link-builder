@@ -545,3 +545,37 @@ pre.code .codemark {
   * { transition: none !important; }
   .flash { animation: none; box-shadow: 0 0 0 3px var(--accent); }
 }
+
+/* --- Prüfpanel: der Knopf muss sichtbar sein, und eine getane Sache soll es zeigen ------
+   Vorher lag jeder Abhilfeknopf hinter einer zugeklappten Prüfung, und eine gedrückte
+   Abhilfe sah aus wie eine ungedrückte. Beides las sich als "der Knopf tut nichts". */
+.btn.done { opacity: .72; }
+.check-group > summary {
+  cursor: pointer; padding: .55rem .6rem; list-style: none;
+  display: flex; gap: .5rem; align-items: baseline;
+  border-top: 1px solid var(--rule); color: var(--muted);
+}
+.check-group > summary::-webkit-details-marker { display: none; }
+.check-group > summary:hover { background: var(--tint); }
+.check-group > summary .h { font-weight: 600; }
+.check-group > summary .where { font-size: .82em; }
+
+/* Der Hinweis mit der Rücknahme bleibt länger stehen und trägt einen Knopf. */
+.toast-undo {
+  margin-left: .7rem; padding: .1rem .5rem; cursor: pointer;
+  background: transparent; color: inherit;
+  border: 1px solid currentColor; font: inherit; font-size: .9em;
+}
+.toast-undo:hover { background: rgba(255,255,255,.15); }
+
+/* Die Auswahl, welches Maß gegen eine Punktebene gerechnet wird. */
+.zielwahl { border-left: 2px solid var(--accent); margin: 0 0 .5rem .4rem; }
+.zielwahl .grouphead { padding-top: .4rem; }
+
+/* Der Hinweis auf die anderen Fassungen desselben Maßes: er warnt, also darf er nicht wie
+   die übrigen Fußnoten aussehen. */
+.hint.vergleich { border-left: 2px solid var(--accent); padding-left: .6rem; }
+.warnhinweis { color: var(--muted); font-size: .92em; }
+
+/* Die Beispielliste sieht aus wie die Knöpfe daneben, damit die Kopfzeile eine Reihe bleibt. */
+select.btn { padding-right: 1.6rem; cursor: pointer; }

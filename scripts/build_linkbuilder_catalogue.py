@@ -12,14 +12,20 @@ Ebenen, weil die beiden Fragen verschieden sind:
     wirklich abdecken. Das ist die Einheit, die man verknüpft.
   * `items`     ist der Suchindex über die einzelnen Indikatoren und Tabellen. Wer nach
     "Arbeitslosenquote" sucht, landet über den Eintrag beim passenden Produkt.
+  * `targets`   ist etwas anderes als beides: Punktebenen, die NICHT verknüpft, sondern von
+    einem räumlichen Maß verbraucht werden. "Entfernung zur nächsten Apotheke" spielt keine
+    Tabelle an, sondern rechnet gegen eine Punktwolke. Deshalb stehen sie in einer eigenen
+    Liste und nicht unter `products`: ein Produkt hat einen Schlüssel, eine Zielebene hat
+    Koordinaten.
 
 Erzeugtes Artefakt, nicht von Hand bearbeiten: die Korrekturen gehören in dieses Skript
-(Werkstattregel: "fix the generator, never its output").
+(Werkstattregel aus destatis-rag/CLAUDE.md, "fix the generator, never its output").
 """
 from __future__ import annotations
 
 import json
 import pathlib
+import re
 import collections
 import datetime
 
@@ -210,6 +216,66 @@ def main() -> None:
                 s_.get("indicator_url") or "https://www.inkar.de/",
             ])
 
+    # --- Zielebenen für die räumlichen Maße ------------------------------------------
+    # Die OSM-Ebenen fallen weiter aus `products` heraus (Satzart `poi_layer`), und das ist
+    # richtig: man verknüpft sie nicht. Als Ziel eines Abstands- oder Dichtemaßes sind sie
+    # aber genau das Richtige, und der Index trägt bereits alles, was ein erzeugtes Skript
+    # dafür braucht: den Tag, die fertige Overpass-Abfrage, die Objektzahl und ihren Stand.
+    zielebenen = []
+    for s_ in saetze:
+        if s_.get("item_type") != "poi_layer":
+            continue
+        hinweis = s_.get("api_hint") or ""
+        abfrage = ""
+        if "Overpass-Abfrage für Deutschland:" in hinweis:
+            abfrage = hinweis.split("Overpass-Abfrage für Deutschland:", 1)[1]
+            # Hinter der Abfrage stehen im selben Feld noch zwei Sätze Prosa. Die Abfrage endet
+            # mit `out center;`, und davor darf nichts abgeschnitten werden.
+            if "out center;" in abfrage:
+                abfrage = abfrage.split("out center;", 1)[0] + "out center;"
+            abfrage = abfrage.strip()
+        text = s_.get("search_description") or ""
+        m_n = re.search(r"etwa ([\d.]+) Objekte", text)
+        m_d = re.search(r"Stand (\d{4}-\d{2}-\d{2})", text)
+        zielebenen.append({
+            "id": s_.get("item_id") or "",
+            "label": re.sub(r"\s*\(OpenStreetMap\)\s*$", "", s_.get("label") or "").strip(),
+            "tag": s_.get("variable_name") or "",
+            "overpass": abfrage,
+            "n": int(m_n.group(1).replace(".", "")) if m_n else None,
+            "asOf": m_d.group(1) if m_d else "",
+            "theme": (s_.get("theme") or "").strip(),
+            "url": s_.get("indicator_url") or s_.get("source_url") or "",
+            "note": text.split("\n")[0].strip()[:240],
+        })
+    zielebenen.sort(key=lambda z: z["label"])
+    fehlend = [z["id"] for z in zielebenen if not z["overpass"] or not z["tag"]]
+    if fehlend:
+        raise SystemExit(f"Zielebene ohne Abfrage oder ohne Tag, das darf nicht sein: {fehlend}")
+
+    # --- Die Begriffe des Merkmalsregisters, damit der Planer sie erkennt ------------
+    # Das Register weiß, welche Fassungen desselben Indikators die Quellen veröffentlichen, und
+    # es entscheidet die Zugehörigkeit über eine geschriebene Regel, keine Ähnlichkeit. Genau
+    # diese Regel kommt hier mit, damit ein Block auf der Arbeitsfläche sagen kann: zu diesem
+    # Maß gibt es 64 Fassungen, sieh nach, ob du die richtige hast. Nur id, Titel und Regel,
+    # zusammen ein paar Kilobyte; die Fassungen selbst bleiben im Register.
+    register = []
+    reg_datei = WURZEL / "tools" / "measure-register" / "register.json"
+    if reg_datei.exists():
+        reg = json.loads(reg_datei.read_text(encoding="utf-8"))
+        for b in reg.get("begriffe", []):
+            register.append({
+                "id": b["id"],
+                "title": b.get("titel") or b["id"],
+                "de": b.get("titel_de") or "",
+                "rule": b.get("regel") or "",
+                "not": b.get("regel_aus") or "",
+                "n": len(b.get("varianten") or []),
+                "sources": len(b.get("quellen") or []),
+            })
+    else:
+        print("  Hinweis: register.json fehlt, der Planer bekommt keine Maßbegriffe")
+
     # Die Notizen je Quelle wandern mit in den Katalog: die Live-Suche liefert Datensätze
     # direkt aus dem GeoDB-Index, und die Oberfläche soll dafür dieselben Hinweise zeigen
     # wie für einen Block aus dem Katalog, ohne dass die Texte zweimal gepflegt werden.
@@ -225,10 +291,12 @@ def main() -> None:
         "sources": quellen,
         "products": produkte,
         "items": eintraege,
+        "targets": zielebenen,
+        "register": register,
     }
     ZIEL.parent.mkdir(parents=True, exist_ok=True)
     ZIEL.write_text(json.dumps(ziel, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"{len(produkte)} Produkte, {len(eintraege)} Einträge -> {ZIEL} "
+    print(f"{len(produkte)} Produkte, {len(eintraege)} Einträge, {len(zielebenen)} Zielebenen, {len(register)} Maßbegriffe -> {ZIEL} "
           f"({ZIEL.stat().st_size // 1024} KB)")
 
 
